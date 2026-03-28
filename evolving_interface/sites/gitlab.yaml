@@ -1,0 +1,17 @@
+name: gitlab
+url: http://localhost:8023
+description: Self-hosted GitLab Community Edition
+
+auth:
+  username: byteblaze
+  password: hello1234
+  login_url: /users/sign_in
+
+agent_hints: >-
+  This is a self-hosted GitLab instance. Projects are listed on the
+  Explore page. Click project names to enter them. The left sidebar
+  has navigation within projects: Repository, Issues, Merge Requests,
+  CI/CD, etc. For contributor stats, go to Repository > Contributors.
+  The repository file browser shows the default branch. Use the
+  branch/tag dropdown to switch branches. Login is needed for
+  personal pages like Todos and user settings.

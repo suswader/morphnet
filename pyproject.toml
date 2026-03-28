@@ -1,0 +1,20 @@
+[project]
+name = "evolving-interface"
+version = "0.1.0"
+description = "Learns reusable API tools from browser automation"
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai",
+    "playwright",
+    "python-dotenv",
+    "httpx",
+    "pydantic",
+    "pyyaml",
+    "pillow>=12.1.1",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[tool.setuptools]
+packages = ["evolving_interface"]

@@ -1,0 +1,16 @@
+name: shopping
+url: http://localhost:7770
+description: Magento-based e-commerce storefront
+
+auth:
+  username: emma.lopez@gmail.com
+  password: "Password.123"
+  login_url: /customer/account/login/
+
+agent_hints: >-
+  This is a Magento e-commerce site. The search bar is at the top
+  of the page. Products are displayed in a grid layout. Use the
+  search bar for finding products rather than navigating categories.
+  Reviews are at the bottom of product pages — scroll down to see
+  them. Star ratings can be filtered by clicking the rating bars.
+  Order history is under My Account > My Orders (requires login).

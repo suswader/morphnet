@@ -1,0 +1,362 @@
+{
+  "open_men_shoes_category": {
+    "name": "open_men_shoes_category",
+    "description": "Navigates to the men's shoes category page filtered by a price limit of under $30.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "max_price": {
+          "type": "number",
+          "description": "The maximum price filter to apply to the category results",
+          "default": 30
+        }
+      },
+      "required": []
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/{path_id_0}/men/shoes.html",
+      "query_template": null,
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"men shoes\" category page filtered to under $30",
+      "task_patterns": [
+        "Open the \"men shoes\" category page filtered to under $30"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "browse_men_shoes": {
+    "name": "browse_men_shoes",
+    "description": "Navigates to the men's shoes category page with an optional price filter.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "price": {
+          "type": "string",
+          "description": "The price filter to apply to the search results (e.g., 'under $30')"
+        }
+      },
+      "required": []
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/{path_id_0}/men/shoes.html",
+      "query_template": {
+        "price": "0-100"
+      },
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"men shoes\" category page filtered to under $30",
+      "task_patterns": [
+        "Open the \"men shoes\" category page filtered to under $30"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "search_advanced_catalog": {
+    "name": "search_advanced_catalog",
+    "description": "Navigates to the advanced catalog search page to allow filtering products by specific criteria.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/catalogsearch/advanced/",
+      "query_template": null,
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"men shoes\" category page filtered to under $30",
+      "task_patterns": [
+        "Open the \"men shoes\" category page filtered to under $30"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "search_products": {
+    "name": "search_products",
+    "description": "Searches the product catalog for items matching a query and applies a price filter.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "q": {
+          "type": "string",
+          "description": "The search term or category name to look for"
+        },
+        "max_price": {
+          "type": "number",
+          "description": "The maximum price filter to apply to the search results"
+        }
+      },
+      "required": [
+        "q"
+      ]
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/catalogsearch/result/",
+      "query_template": {
+        "q": "{q}"
+      },
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"makeup remover\" category page filtered to under $46.99",
+      "task_patterns": [
+        "Open the \"makeup remover\" category page filtered to under $46.99"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "search_suggestions": {
+    "name": "search_suggestions",
+    "description": "Retrieve search query suggestions based on a provided search term.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "q": {
+          "type": "string",
+          "description": "The search query string to get suggestions for"
+        }
+      },
+      "required": [
+        "q"
+      ]
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/search/ajax/suggest/",
+      "query_template": {
+        "q": "HONGJ Hawaiian Beach Outfits Set",
+        "_": "1774467008246"
+      },
+      "body_template": null,
+      "headers": {
+        "x-requested-with": "XMLHttpRequest"
+      },
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list",
+      "task_patterns": [
+        "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "search_advanced_products": {
+    "name": "search_advanced_products",
+    "description": "Search for products using advanced filters such as name, price range, and currency.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name or keyword of the product to search for"
+        },
+        "price_from": {
+          "type": "number",
+          "description": "The minimum price filter"
+        },
+        "price_to": {
+          "type": "number",
+          "description": "The maximum price filter"
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency code for the price filters"
+        }
+      },
+      "required": []
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/catalogsearch/advanced/result/",
+      "query_template": {
+        "name": "{name}",
+        "price[from]": "0",
+        "price[to]": "{price[to]}",
+        "price[currency]": "USD"
+      },
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"makeup remover\" category page filtered to under $46.99",
+      "task_patterns": [
+        "Open the \"makeup remover\" category page filtered to under $46.99"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "add_product_to_wishlist": {
+    "name": "add_product_to_wishlist",
+    "description": "Adds the specified Hawaiian beach outfit set to the user's wish list.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "product_name": {
+          "type": "string",
+          "description": "The name of the product to add to the wish list",
+          "default": "HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits"
+        }
+      },
+      "required": [
+        "product_name"
+      ]
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/hongj-hawaiian-beach-outfits-set-for-mens-summer-tropical-tree-printed-relaxed-fit-hawaii-shirts-shorts-2-piece-suits.html",
+      "query_template": null,
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list",
+      "task_patterns": [
+        "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "add_to_wishlist": {
+    "name": "add_to_wishlist",
+    "description": "Adds a specified product to the user's account wish list.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "product_name": {
+          "type": "string",
+          "description": "The name or description of the product to add to the wish list"
+        }
+      },
+      "required": [
+        "product_name"
+      ]
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/customer/account/",
+      "query_template": null,
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list",
+      "task_patterns": [
+        "Add HONGJ Hawaiian Beach Outfits Set for Mens, Summer Tropical Tree Printed Relaxed-fit Hawaii Shirts Shorts 2 Piece Suits to my wish list"
+      ],
+      "status": "new",
+      "success_count": 1,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "get_low_rated_reviews": {
+    "name": "get_low_rated_reviews",
+    "description": "Retrieves a list of review titles for a specific product that have a rating of 2 stars or below.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "product_id": {
+          "type": "string",
+          "description": "The unique identifier of the product to fetch reviews for."
+        }
+      },
+      "required": [
+        "product_id"
+      ]
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/{path_review}/product/listAjax/id/{path_id_1}/",
+      "query_template": null,
+      "body_template": null,
+      "headers": {
+        "x-requested-with": "XMLHttpRequest"
+      },
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Get all review titles with 2 stars or below for the product on the current page.",
+      "task_patterns": [
+        "Get all review titles with 2 stars or below for the product on the current page."
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  },
+  "get_makeup_remover_category": {
+    "name": "get_makeup_remover_category",
+    "description": "Navigates to the makeup remover category page and applies a price filter of under $46.99.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "max_price": {
+          "type": "number",
+          "description": "The maximum price threshold for filtering products",
+          "default": 46.99
+        }
+      },
+      "required": []
+    },
+    "_http": {
+      "method": "GET",
+      "url_template": "http://localhost:7770/{path_id_0}/{path_makeup}/makeup-remover.html",
+      "query_template": null,
+      "body_template": null,
+      "headers": {},
+      "session_params": {}
+    },
+    "_meta": {
+      "discovered_from_task": "Open the \"makeup remover\" category page filtered to under $46.99",
+      "task_patterns": [
+        "Open the \"makeup remover\" category page filtered to under $46.99"
+      ],
+      "status": "new",
+      "success_count": 0,
+      "failure_count": 0,
+      "consecutive_failures": 0
+    }
+  }
+}

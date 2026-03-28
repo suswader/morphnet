@@ -1,0 +1,73 @@
+{
+  "run_name": "baseline_learning",
+  "run_number": 1,
+  "task_file": "verified-4site.json",
+  "task_count": 20,
+  "seed": 42,
+  "mcp_reset": true,
+  "mcp_tools_before": {
+    "shopping": 0,
+    "shopping_admin": 0,
+    "reddit": 0,
+    "gitlab": 0
+  },
+  "mcp_tools_after": {
+    "shopping": 10,
+    "shopping_admin": 11,
+    "reddit": 17,
+    "gitlab": 28
+  },
+  "start_time": "2026-03-25T18:27:32.394392+00:00",
+  "end_time": "2026-03-25T19:59:05.136874+00:00",
+  "wall_clock_seconds": 5492.7,
+  "total_tokens": 4446172,
+  "sr_tmpl": 27.78,
+  "sr_tmpl_ci_low": 4.82,
+  "sr_tmpl_ci_high": 50.73,
+  "per_site_sr": {
+    "gitlab": {
+      "sr": 33.33,
+      "ci": 143.43,
+      "templates": 3
+    },
+    "reddit": {
+      "sr": 28.57,
+      "ci": 45.13,
+      "templates": 7
+    },
+    "shopping": {
+      "sr": 0.0,
+      "ci": 0.0,
+      "templates": 3
+    },
+    "shopping_admin": {
+      "sr": 40.0,
+      "ci": 68.0,
+      "templates": 5
+    }
+  },
+  "per_type_sr": {
+    "MUTATE": {
+      "passed": 3,
+      "total": 12,
+      "pct": 25.0
+    },
+    "NAVIGATE": {
+      "passed": 0,
+      "total": 2,
+      "pct": 0.0
+    },
+    "RETRIEVE": {
+      "passed": 2,
+      "total": 6,
+      "pct": 33.33
+    }
+  },
+  "git_commit": "unknown",
+  "python_version": "3.12.12",
+  "model_versions": {
+    "computer_use": "gemini-3-flash-preview",
+    "reasoning": "gemini-3.1-pro-preview",
+    "fast": "gemini-3.1-flash-lite-preview"
+  }
+}

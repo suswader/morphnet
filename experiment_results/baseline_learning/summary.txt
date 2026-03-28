@@ -1,0 +1,17 @@
+
+======================================================================
+  baseline_learning
+======================================================================
+  Tasks:      5/20 passed (25.0%)
+  SR_tmpl:    27.8% ± 23.0%  (18 templates)
+
+  Per-site SR_tmpl:
+    gitlab                33.3% ± 143.4%  (3 templates)
+    reddit                28.6% ± 45.1%  (7 templates)
+    shopping               0.0% ± 0.0%  (3 templates)
+    shopping_admin        40.0% ± 68.0%  (5 templates)
+
+  Per task-type:
+    MUTATE                 3/ 12  (25.0%)
+    NAVIGATE               0/  2  (0.0%)
+    RETRIEVE               2/  6  (33.3%)

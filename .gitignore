@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv
+
+# Environment
+.env
+
+# Results and logs
+results/
+evolving_interface/results/
+evolving_interface/site_learnings/
+
+# MCP tools (generated at runtime)
+evolving_interface/mcps/
+
+# OS files
+.DS_Store
+
+# Claude Code config (personal settings)
+.claude/
