@@ -12,16 +12,31 @@ wheels/
 # Environment
 .env
 
-# Results and logs
-results/
-evolving_interface/results/
-evolving_interface/site_learnings/
-
-# MCP tools (generated at runtime)
-evolving_interface/mcps/
-
 # OS files
 .DS_Store
 
 # Claude Code config (personal settings)
 .claude/
+
+# Experiment results (generated per-run, not source code)
+results/
+
+# Backup files
+backup/
+
+# Log files
+*.log
+
+# Research papers (copyrighted)
+papers/
+
+# Site-specific learned data (generated at runtime)
+morphnet/sites/*/tools.json
+morphnet/sites/*/profile.json
+
+# Lock file (regenerated from pyproject.toml)
+uv.lock
+
+# Old code (fully replaced by morphnet/)
+evolving_interface/
+experiment_results/
