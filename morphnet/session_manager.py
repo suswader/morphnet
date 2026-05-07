@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 
 from curl_cffi import requests as cffi_requests
-from playwright.async_api import (
+from rebrowser_playwright.async_api import (
     async_playwright,
     Page,
     BrowserContext,
@@ -28,6 +29,7 @@ from playwright.async_api import (
     Playwright,
     Response,
 )
+from playwright_stealth import Stealth
 
 import httpx
 from google import genai
@@ -184,7 +186,22 @@ def call_gemini(
                 continue
             raise
     else:
-        raise last_exc  # type: ignore[misc]
+        # Image retries exhausted — strip images and retry text-only once
+        text_only = [part for part in normalized if not isinstance(part, genai_types.Part) or not getattr(part, "inline_data", None)]
+        if not text_only:
+            text_only = normalized  # Nothing to strip, give up
+        if text_only != normalized:
+            logger.warning("Image retries exhausted — falling back to text-only call")
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=text_only,
+                    config=config,
+                )
+            except Exception:
+                raise last_exc  # type: ignore[misc]
+        else:
+            raise last_exc  # type: ignore[misc]
 
     # Log token usage for performance analysis
     usage = getattr(response, "usage_metadata", None)
@@ -424,7 +441,7 @@ _ENUMERATE_ELEMENTS_JS = """() => {
     ]);
     // Only check cursor:pointer on tags plausibly made interactive via JS
     const cursorCheckTags = new Set([
-        'div', 'span', 'li', 'td', 'img', 'svg', 'p', 'section', 'article', 'tr', 'th', 'label'
+        'div', 'span', 'li', 'td', 'img', 'svg', 'p', 'section', 'article', 'tr', 'th', 'label', 'abbr'
     ]);
 
     function isInteractive(el) {
@@ -477,6 +494,22 @@ _ENUMERATE_ELEMENTS_JS = """() => {
                         }
                         break;  // Only one React fiber key per element
                     }
+                }
+            } catch (e) {}
+        }
+        // Dialog content heuristic — elements inside role="dialog" or aria-modal
+        // that have aria-label are typically interactive (date cells, grid cells, menu items).
+        // Calendars often use event delegation so individual cells lack explicit handlers.
+        if (el.hasAttribute('aria-label') && el.children.length <= 2) {
+            try {
+                let ancestor = el.parentElement;
+                for (let d = 0; d < 10 && ancestor; d++) {
+                    const r = ancestor.getAttribute('role');
+                    if (r === 'dialog' || r === 'grid' || r === 'listbox' ||
+                        ancestor.hasAttribute('aria-modal')) {
+                        return true;
+                    }
+                    ancestor = ancestor.parentElement;
                 }
             } catch (e) {}
         }
@@ -566,8 +599,13 @@ _ENUMERATE_ELEMENTS_JS = """() => {
             const txt = el.innerText.trim();
             if (txt.length > 0 && txt.length <= 50) {
                 const sameTag = [...document.querySelectorAll(tag)];
-                const matches = sameTag.filter(e => (e.innerText || '').trim() === txt);
-                if (matches.length === 1) return tag + ':has-text("' + txt.replace(/"/g, '\\\\"') + '")';
+                const exactMatches = sameTag.filter(e => (e.innerText || '').trim() === txt);
+                // :has-text does substring matching — check for collisions
+                const substringMatches = sameTag.filter(e => (e.innerText || '').includes(txt));
+                if (exactMatches.length === 1 && substringMatches.length === 1) {
+                    return tag + ':has-text("' + txt.replace(/"/g, '\\\\"') + '")';
+                }
+                // Substring collision (e.g. "20" vs "April 2026") — fall through to CSS path
             }
         }
 
@@ -815,6 +853,8 @@ class SessionManager:
         viewport_height: int = 900,
         site_name: str | None = None,
         trace: TaskTrace | None = None,
+        proxy_server: str | None = None,
+        proxy_bypass: str | None = None,
     ):
         # Config — stored, not interpreted
         self.start_url = start_url
@@ -839,13 +879,17 @@ class SessionManager:
         self._context: BrowserContext | None = None
         self.page: Page | None = None
 
-        # curl_cffi session for MCP HTTP replay
-        self.http_session: cffi_requests.Session = cffi_requests.Session(impersonate="chrome124")
+        # Proxy configuration
+        self.proxy_server = proxy_server
+        self.proxy_bypass = proxy_bypass
+
+        # curl_cffi session for HTTP replay — initialized in start() to match browser TLS
+        self.http_session: cffi_requests.Session | None = None
 
         # Site configuration
         self._site_profile: dict | None = None
         self._credentials: dict | None = None
-        self._noise_domains: set[str] = set()
+        self._noise_domains: set[str] = set()  # populated from noise_filter module
 
         # Element discovery state (stable IDs across same-page scans)
         self._previous_elements: list[InteractiveElement] = []
@@ -876,106 +920,230 @@ class SessionManager:
         return self._trace.log("session_manager", event_type, summary, **kwargs)
 
     # ===================================================================
+    # Stealth
+    # ===================================================================
+
+    async def _detect_real_user_agent(self) -> str:
+        """Get the actual Chrome version's User-Agent string."""
+        try:
+            ua = await self.page.evaluate("() => navigator.userAgent")
+            if ua and "Chrome" in ua:
+                return ua
+        except Exception:
+            pass
+        return (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
+
+    @staticmethod
+    def _build_custom_stealth_script() -> str:
+        """Project-specific stealth patches on top of playwright-stealth.
+
+        playwright-stealth covers ~30 fingerprint vectors. This adds modern
+        detection signals from 2025-2026 that stealth doesn't cover yet.
+        """
+        return """(() => {
+            // 1. NetworkInformation API — Cloudflare checks this
+            if (!navigator.connection) {
+                Object.defineProperty(navigator, 'connection', {
+                    get: () => ({
+                        effectiveType: '4g',
+                        rtt: 50 + Math.floor(Math.random() * 50),
+                        downlink: 8 + Math.random() * 2,
+                        saveData: false,
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                    }),
+                    configurable: true,
+                });
+            }
+
+            // 2. chrome.loadTimes and chrome.csi — present in real Chrome, not Chromium
+            if (window.chrome && !window.chrome.loadTimes) {
+                window.chrome.loadTimes = function() {
+                    const now = Date.now() / 1000;
+                    return {
+                        commitLoadTime: now - 0.5, connectionInfo: 'h2',
+                        finishDocumentLoadTime: now - 0.1, finishLoadTime: now,
+                        firstPaintAfterLoadTime: 0, firstPaintTime: now - 0.2,
+                        navigationType: 'Other', npnNegotiatedProtocol: 'h2',
+                        requestTime: now - 1.0, startLoadTime: now - 1.0,
+                        wasAlternateProtocolAvailable: false,
+                        wasFetchedViaSpdy: true, wasNpnNegotiated: true,
+                    };
+                };
+            }
+            if (window.chrome && !window.chrome.csi) {
+                window.chrome.csi = function() {
+                    return {
+                        startE: Date.now(), onloadT: Date.now(),
+                        pageT: Math.random() * 1000, tran: 15,
+                    };
+                };
+            }
+
+            // 3. WebRTC local IP leak prevention
+            if (window.RTCPeerConnection) {
+                const origRTC = window.RTCPeerConnection;
+                window.RTCPeerConnection = function(...args) {
+                    const pc = new origRTC(...args);
+                    const origCreateOffer = pc.createOffer.bind(pc);
+                    pc.createOffer = function(...offerArgs) {
+                        return origCreateOffer(...offerArgs).then(offer => {
+                            if (offer.sdp) {
+                                offer.sdp = offer.sdp.replace(
+                                    /a=candidate:.*(10\\\\.|192\\\\.168\\\\.|172\\\\.(1[6-9]|2[0-9]|3[0-1])\\\\.|::1).*\\r\\n/g,
+                                    ''
+                                );
+                            }
+                            return offer;
+                        });
+                    };
+                    return pc;
+                };
+                window.RTCPeerConnection.prototype = origRTC.prototype;
+            }
+
+            // 4. Intl.DateTimeFormat — ensure calendar/numberingSystem present
+            const origResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+            Intl.DateTimeFormat.prototype.resolvedOptions = function() {
+                const result = origResolvedOptions.call(this);
+                if (!result.calendar) result.calendar = 'gregory';
+                if (!result.numberingSystem) result.numberingSystem = 'latn';
+                return result;
+            };
+
+            // 5. MediaDevices.enumerateDevices — empty list is a bot signal
+            if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+                const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+                navigator.mediaDevices.enumerateDevices = function() {
+                    return origEnumerate().then(devices => {
+                        if (devices.length === 0) {
+                            return [
+                                {kind: 'audioinput', deviceId: 'default', label: '', groupId: 'g1'},
+                                {kind: 'audiooutput', deviceId: 'default', label: '', groupId: 'g1'},
+                                {kind: 'videoinput', deviceId: 'cam1', label: '', groupId: 'g2'},
+                            ];
+                        }
+                        return devices;
+                    });
+                };
+            }
+
+            // 6. Capture history.pushState / replaceState for observation
+            // Use a Symbol key to avoid detection by bot-protection scanning window properties
+            const _navKey = Symbol.for('_mn_nav');
+            window[_navKey] = [];
+            const _origPushState = history.pushState.bind(history);
+            const _origReplaceState = history.replaceState.bind(history);
+            history.pushState = function(state, title, url) {
+                window[_navKey].push({
+                    ts: Date.now(), type: 'pushState',
+                    url: url ? new URL(url, location.href).href : location.href,
+                });
+                return _origPushState(state, title, url);
+            };
+            history.replaceState = function(state, title, url) {
+                window[_navKey].push({
+                    ts: Date.now(), type: 'replaceState',
+                    url: url ? new URL(url, location.href).href : location.href,
+                });
+                return _origReplaceState(state, title, url);
+            };
+
+            // 7. Clean stack traces of CDP/playwright markers
+            const origError = Error;
+            const _blockedPatterns = ['__pwInitScripts', '__playwright', 'cdc_'];
+            Error = function(...args) {
+                const err = new origError(...args);
+                if (err.stack) {
+                    for (const pat of _blockedPatterns) {
+                        err.stack = err.stack.split('\\n')
+                            .filter(line => !line.includes(pat))
+                            .join('\\n');
+                    }
+                }
+                return err;
+            };
+            Error.prototype = origError.prototype;
+            Error.captureStackTrace = origError.captureStackTrace;
+        })()"""
+
+    # ===================================================================
     # Lifecycle
     # ===================================================================
 
     async def start(self) -> None:
         """Initialise browser connection, traffic capture, navigate to start_url."""
         # 1. Load site config
-        self._noise_domains = self._load_noise_domains()
+        self._noise_domains = self._load_noise_domains()  # site-specific + shared
         self._load_site_config()
 
         # 2. Connect to Chrome via CDP
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.connect_over_cdp(self.chrome_cdp_url)
         self._context = self._browser.contexts[0]
-        self.page = (
-            self._context.pages[0]
-            if self._context.pages
-            else await self._context.new_page()
+        # Don't close stale pages — calling .close() on zombie CDP targets
+        # can corrupt the Playwright session. Just create a fresh page.
+        self.page = await self._context.new_page()
+
+        # 3. Viewport (with retry — stale CDP state can cause transient failures)
+        try:
+            await self.page.set_viewport_size({
+                "width": self.viewport_width,
+                "height": self.viewport_height,
+            })
+        except Exception:
+            # Full reconnect: dispose broken connection, start fresh
+            logger.warning("Viewport set failed, reconnecting CDP")
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.connect_over_cdp(
+                self.chrome_cdp_url,
+            )
+            self._context = self._browser.contexts[0]
+            self.page = await self._context.new_page()
+            await self.page.set_viewport_size({
+                "width": self.viewport_width,
+                "height": self.viewport_height,
+            })
+
+        # 3b. CDP domains are enabled on-demand per session (AXTree, heap GC, etc.)
+        # Do NOT eagerly enable Runtime/Debugger/Network here — bot protection
+        # (Akamai, PerimeterX) detects Debugger.enable artifacts and 403-blocks
+        # all subsequent API calls.
+
+        # 4a. Apply playwright-stealth patches (~30 fingerprint vectors)
+        stealth = Stealth(
+            navigator_languages_override=("en-US", "en"),
+            navigator_vendor_override="Google Inc.",
+            init_scripts_only=False,
         )
+        await stealth.apply_stealth_async(self._context)
 
-        # 3. Viewport
-        await self.page.set_viewport_size({
-            "width": self.viewport_width,
-            "height": self.viewport_height,
-        })
+        # 4b. Custom additions on top of stealth (modern detection in 2025-2026)
+        await self.page.add_init_script(self._build_custom_stealth_script())
 
-        # 4. Anti-detection — patch CDP/automation fingerprints
-        await self.page.add_init_script("""(() => {
-            // 1. navigator.webdriver
-            Object.defineProperty(navigator, 'webdriver', {get: () => false});
-
-            // 2. Remove CDP-injected cdc_ variables on window/document
-            //    Chrome DevTools protocol injects cdc_adoQpoasnfa76pfcZLmcfl_* properties.
-            const cleanCDC = (obj) => {
-                for (const key of Object.keys(obj)) {
-                    if (key.startsWith('cdc_') || key.startsWith('$cdc_')) {
-                        delete obj[key];
-                    }
-                }
-            };
-            cleanCDC(window);
-            cleanCDC(document);
-
-            // 3. chrome.runtime — must exist but .connect() etc should look normal
-            if (!window.chrome) window.chrome = {};
-            if (!window.chrome.runtime) {
-                window.chrome.runtime = {
-                    connect: function() {},
-                    sendMessage: function() {},
-                    id: undefined,
-                };
+        # 4c. Align curl_cffi TLS fingerprint with actual Chrome version
+        ua = await self._detect_real_user_agent()
+        m = re.search(r"Chrome/(\d+)", ua)
+        chrome_major = int(m.group(1)) if m else 131
+        impersonate = f"chrome{min(max(chrome_major, 110), 131)}"
+        self.http_session = cffi_requests.Session(impersonate=impersonate)
+        if self.proxy_server:
+            self.http_session.proxies = {
+                "http": self.proxy_server,
+                "https": self.proxy_server,
             }
-
-            // 4. Permissions API — hide "denied" for notifications (bot signal)
-            const origQuery = window.Permissions?.prototype?.query;
-            if (origQuery) {
-                window.Permissions.prototype.query = function(params) {
-                    if (params.name === 'notifications') {
-                        return Promise.resolve({state: 'prompt', onchange: null});
-                    }
-                    return origQuery.call(this, params);
-                };
-            }
-
-            // 5. navigator.plugins — must be non-empty (headless/CDP can have empty)
-            if (navigator.plugins.length === 0) {
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [
-                        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer',
-                         description: 'Portable Document Format', length: 1},
-                        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
-                         description: '', length: 1},
-                        {name: 'Native Client', filename: 'internal-nacl-plugin',
-                         description: '', length: 2},
-                    ],
-                });
-            }
-
-            // 6. navigator.languages — ensure populated
-            if (!navigator.languages || navigator.languages.length === 0) {
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                });
-            }
-
-            // 7. Prevent iframe contentWindow detection of automation
-            const origHTMLIFrameElement = HTMLIFrameElement.prototype.__lookupGetter__('contentWindow');
-            if (origHTMLIFrameElement) {
-                Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-                    get: function() {
-                        const w = origHTMLIFrameElement.call(this);
-                        if (w) {
-                            try {
-                                Object.defineProperty(w.navigator, 'webdriver', {get: () => false});
-                            } catch(e) {}
-                        }
-                        return w;
-                    }
-                });
-            }
-        })()""")
+        self._log("session_started", f"TLS aligned: Chrome/{chrome_major} → curl_cffi {impersonate}")
 
         # 5. Traffic capture
         await self._setup_traffic_capture(self.page)
@@ -993,6 +1161,27 @@ class SessionManager:
 
         # 8. Dismiss blocking popups (cookie banners, age gates, surveys)
         await self.dismiss_popups()
+
+        # 8b. Some sites (e.g. LEGO) keep a consent-modal URL param that re-triggers
+        #     the modal on subsequent navigations. Strip it by navigating to the clean URL.
+        if self.page:
+            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+            parsed = urlparse(self.page.url)
+            params = parse_qs(parsed.query)
+            modal_keys = [k for k in params if "consent" in k.lower() or "modal" in k.lower()]
+            if modal_keys:
+                for k in modal_keys:
+                    del params[k]
+                clean_query = urlencode(params, doseq=True)
+                clean_url = urlunparse(parsed._replace(query=clean_query))
+                logger.info("Stripping consent modal URL param: %s → %s", self.page.url[:80], clean_url[:80])
+                try:
+                    await self.page.goto(clean_url, wait_until="domcontentloaded", timeout=15_000)
+                    await self.wait_for_page_ready()
+                    # Re-dismiss in case navigating re-triggered a popup
+                    await self.dismiss_popups()
+                except Exception as exc:
+                    logger.warning("Failed to navigate to clean URL: %s", exc)
 
         # 9. Sync cookies to curl_cffi
         await self.sync_cookies_to_http_session()
@@ -1014,6 +1203,13 @@ class SessionManager:
         """Clean shutdown. Does NOT kill the Chrome process (it persists)."""
         try:
             self.http_session.close()
+        except Exception:
+            pass
+        # Close our page explicitly so Chrome doesn't have dangling targets
+        # that confuse the next process's CDP connection.
+        try:
+            if self.page:
+                await self.page.close()
         except Exception:
             pass
         try:
@@ -1120,24 +1316,21 @@ class SessionManager:
     # ===================================================================
 
     def _load_noise_domains(self) -> set[str]:
-        """Load noise domains from ./sites/noise_domains.txt, fall back to defaults."""
+        """Load noise domains: shared module defaults + optional site-specific overrides."""
+        from morphnet.noise_filter import get_noise_domains
+
+        # Start with the shared set (EasyPrivacy domains + supplementary infra)
+        domains = get_noise_domains()
+
+        # Merge site-specific overrides from ./sites/noise_domains.txt
         noise_file = SITES_DIR / "noise_domains.txt"
         if noise_file.exists():
-            domains: set[str] = set()
             for line in noise_file.read_text().splitlines():
                 line = line.strip()
                 if line and not line.startswith("#"):
                     domains.add(line)
-            return domains
-        return {
-            "google-analytics.com", "googletagmanager.com",
-            "segment.io", "segment.com",
-            "mixpanel.com", "sentry.io", "hotjar.com",
-            "doubleclick.net", "googlesyndication.com",
-            "facebook.net", "fbcdn.net",
-            "newrelic.com", "nr-data.net",
-            "cloudflareinsights.com",
-        }
+
+        return domains
 
     def _load_site_config(self) -> None:
         """Load profile.json and credentials.json for the configured site_name."""
@@ -1179,12 +1372,9 @@ class SessionManager:
     # ===================================================================
 
     def _is_noise_url(self, url: str) -> bool:
-        """Check URL against the noise domain blocklist."""
-        hostname = urlparse(url).hostname or ""
-        return any(
-            hostname == d or hostname.endswith(f".{d}")
-            for d in self._noise_domains
-        )
+        """Check URL against adblock engine + domain blocklist."""
+        from morphnet.noise_filter import is_noise_url
+        return is_noise_url(url, source_url=self.start_url or "https://example.com")
 
     async def _setup_traffic_capture(self, page: Page) -> None:
         """Attach response listener for real-time API traffic capture."""
@@ -1268,18 +1458,18 @@ class SessionManager:
     # ===================================================================
 
     async def wait_for_page_ready(self, timeout_ms: int = 10_000) -> bool:
-        """Wait for network idle + DOM mutation settling."""
+        """Wait for page readiness using DOM-first strategy.
+
+        SPAs like Cleartrip fire constant analytics/RUM requests that prevent
+        networkidle from ever resolving.  Strategy: try DOM settle first (fast),
+        then give network a short window.  If DOM settled, don't block on network.
+        """
         assert self.page is not None, "SessionManager not started"
         t0 = time.time()
         network_ok = True
         dom_ok = True
 
-        try:
-            await self.page.wait_for_load_state("networkidle", timeout=timeout_ms)
-        except Exception:
-            network_ok = False
-
-        # MutationObserver-based DOM settling
+        # Stage 1: DOM settle — fast, reliable even on heavy SPAs
         try:
             await self.page.evaluate("""() => {
                 return new Promise((resolve) => {
@@ -1296,6 +1486,14 @@ class SessionManager:
             }""")
         except Exception:
             dom_ok = False
+
+        # Stage 2: Short network idle — if DOM settled, use a short timeout
+        # because the page is likely ready and network chatter is just analytics.
+        net_timeout = 2000 if dom_ok else timeout_ms
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=net_timeout)
+        except Exception:
+            network_ok = False
 
         # Check for error/stuck pages and auto-reload
         try:
@@ -1424,8 +1622,82 @@ class SessionManager:
                         continue
 
             if not clicked:
-                # No dismiss button found — stop trying
-                logger.debug("Popup detected but no dismiss button matched (round %d)", _round + 1)
+                # Fallback: structural detection — find high-z-index overlay
+                # containers covering >30% viewport, then click the smallest
+                # button/interactive inside them (likely a close/dismiss control).
+                # No class-name or text matching — purely geometric + z-index.
+                try:
+                    closed_via_js = await self.page.evaluate("""() => {
+                        const vw = window.innerWidth;
+                        const vh = window.innerHeight;
+                        const vpArea = vw * vh;
+
+                        // 1. Find overlay containers: fixed/absolute, high z-index, covers >30% viewport
+                        const overlays = [];
+                        for (const el of document.querySelectorAll('*')) {
+                            const cs = window.getComputedStyle(el);
+                            const pos = cs.position;
+                            if (pos !== 'fixed' && pos !== 'absolute') continue;
+                            const z = parseInt(cs.zIndex, 10);
+                            if (isNaN(z) || z < 100) continue;
+                            const rect = el.getBoundingClientRect();
+                            const area = rect.width * rect.height;
+                            if (area < vpArea * 0.3) continue;
+                            overlays.push({el, z, area});
+                        }
+                        if (overlays.length === 0) return null;
+
+                        // Sort by z-index descending — topmost overlay first
+                        overlays.sort((a, b) => b.z - a.z);
+                        const topOverlay = overlays[0].el;
+
+                        // 2. Find the smallest visible button inside the overlay
+                        //    (close buttons are typically small icon buttons)
+                        const buttons = topOverlay.querySelectorAll(
+                            'button, [role="button"], a[href="#"], [tabindex="0"]'
+                        );
+                        let bestBtn = null;
+                        let bestArea = Infinity;
+                        for (const btn of buttons) {
+                            const rect = btn.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) continue;
+                            // Skip buttons larger than 200x60 (likely primary CTA, not close)
+                            if (rect.width > 200 && rect.height > 60) continue;
+                            const area = rect.width * rect.height;
+                            if (area < bestArea) {
+                                bestArea = area;
+                                bestBtn = btn;
+                            }
+                        }
+
+                        if (bestBtn) {
+                            const rect = bestBtn.getBoundingClientRect();
+                            bestBtn.click();
+                            return {
+                                method: 'overlay_smallest_button',
+                                z: overlays[0].z,
+                                btn_size: Math.round(rect.width) + 'x' + Math.round(rect.height),
+                            };
+                        }
+                        return null;
+                    }""")
+                    if closed_via_js:
+                        clicked = True
+                        dismissed += 1
+                        logger.info("Popup dismissed (round %d): overlay close — z=%s, btn=%s",
+                                    _round + 1, closed_via_js.get("z"), closed_via_js.get("btn_size"))
+                        self._log("popup_dismissed", f"Auto-dismissed popup via overlay detection", detail={
+                            "round": _round + 1,
+                            "method": closed_via_js,
+                            "dialog_count": len(dialog_nodes),
+                        })
+                        await self.wait_for_page_ready(timeout_ms=3_000)
+                except Exception:
+                    pass
+
+            if not clicked:
+                # No dismiss method worked — stop trying
+                logger.debug("Popup detected but no dismiss method matched (round %d)", _round + 1)
                 break
 
         if dismissed:
@@ -1434,16 +1706,26 @@ class SessionManager:
 
     @staticmethod
     def _find_dialog_nodes(node: dict, depth: int = 0) -> list[dict]:
-        """Recursively find dialog/alertdialog/modal nodes in AXTree."""
+        """Recursively find dialog/alertdialog nodes in AXTree.
+
+        Detection is role-based only (ARIA semantics). No name/text matching —
+        the accessibility tree's role field is the authoritative signal for
+        whether something is a dialog.
+        """
         results: list[dict] = []
         role = (node.get("role") or "").lower()
         if role in ("dialog", "alertdialog"):
             results.append(node)
-        # Also detect modal-like patterns: nodes with "modal" in name
-        name = (node.get("name") or "").lower()
-        if "modal" in name or "popup" in name or "overlay" in name:
-            results.append(node)
-        if depth < 10:  # Don't recurse too deep
+        # aria-modal attribute on any role also signals a modal overlay
+        properties = node.get("properties", [])
+        if isinstance(properties, list):
+            for prop in properties:
+                if isinstance(prop, dict) and prop.get("name") == "modal":
+                    val = prop.get("value", {})
+                    if (isinstance(val, dict) and val.get("value")) or val is True:
+                        if node not in results:
+                            results.append(node)
+        if depth < 10:
             for child in node.get("children", []):
                 results.extend(SessionManager._find_dialog_nodes(child, depth + 1))
         return results
@@ -1453,13 +1735,18 @@ class SessionManager:
     # ===================================================================
 
     async def take_screenshot(self) -> Screenshot:
-        """Capture full-page JPEG screenshot. Appends to history.
+        """Capture JPEG screenshot. Uses viewport-only for very tall pages
+        to avoid exceeding Gemini's image processing limits.
 
         SoM annotation is owned by computer_use.py, not session_manager.
         """
         assert self.page is not None, "SessionManager not started"
 
-        raw = await self.page.screenshot(full_page=True, type="jpeg", quality=85)
+        # Pages taller than 5x viewport produce images that Gemini rejects.
+        # Fall back to viewport-only screenshot for those.
+        page_height = await self.page.evaluate("document.documentElement.scrollHeight")
+        use_full_page = page_height <= self.viewport_height * 5
+        raw = await self.page.screenshot(full_page=use_full_page, type="jpeg", quality=85)
         dimensions = await self.page.evaluate("""() => ({
             viewportHeight: window.innerHeight,
             viewportWidth: window.innerWidth,
@@ -1475,6 +1762,9 @@ class SessionManager:
             full_page_height=dimensions["fullPageHeight"],
         )
         self._screenshot_history.append(screenshot)
+        # Cap screenshot history to prevent unbounded memory growth in long sessions
+        if len(self._screenshot_history) > 20:
+            self._screenshot_history = self._screenshot_history[-10:]
         self._log("screenshot_taken", f"Screenshot: {self.page.url}", detail={
             "url": self.page.url,
             "viewport": f"{dimensions['viewportWidth']}x{dimensions['viewportHeight']}",
@@ -1490,6 +1780,35 @@ class SessionManager:
 
     def clear_screenshot_history(self) -> None:
         self._screenshot_history.clear()
+
+    async def cleanup_between_subtasks(self) -> None:
+        """Lightweight memory cleanup between orchestrator subtasks.
+
+        Closes stale extra tabs, clears old screenshots, and triggers
+        browser garbage collection to prevent memory growth in long sessions.
+        """
+        if self._context is None or self.page is None:
+            return
+
+        # Close stale extra tabs (keep only the active page)
+        try:
+            for p in self._context.pages:
+                if p is not self.page and not p.is_closed():
+                    await p.close()
+        except Exception:
+            pass
+
+        # Cap screenshot history (keep last 5)
+        if len(self._screenshot_history) > 5:
+            self._screenshot_history = self._screenshot_history[-5:]
+
+        # Trigger browser GC via CDP if available
+        try:
+            cdp = await self.page.context.new_cdp_session(self.page)
+            await cdp.send("HeapProfiler.collectGarbage")
+            await cdp.detach()
+        except Exception:
+            pass  # Not all browsers support CDP
 
     # ===================================================================
     # Element Discovery (stable IDs across same-page scans)
@@ -1964,6 +2283,11 @@ class SessionManager:
     # --- Individual action implementations ------------------------------
 
     async def _action_click(self, action: dict) -> ActionResult:
+        """Click with human-like approach: scroll into view, hover, pause, click.
+
+        If the click opens a new tab (target=_blank), automatically switches
+        self.page to the new tab so CU continues there.
+        """
         element_id = action.get("element_id")
         if element_id is None:
             return ActionResult(success=False, error="click requires element_id")
@@ -1971,21 +2295,81 @@ class SessionManager:
         if not el:
             return ActionResult(success=False, error=f"Element {element_id} not found")
 
+        pages_before = set(self._context.pages) if self._context else set()
+
         try:
-            await self.page.locator(el.selector).first.click(timeout=5_000)
+            locator = self.page.locator(el.selector).first
+            try:
+                await locator.scroll_into_view_if_needed(timeout=2_000)
+            except Exception:
+                pass
+            # Hover first — fires mouseenter/mouseover
+            try:
+                await locator.hover(timeout=2_000)
+                await asyncio.sleep(0.15 + random.random() * 0.35)
+            except Exception:
+                pass
+            await locator.click(
+                delay=40 + random.randint(0, 80),
+                timeout=5_000,
+            )
+            await self._switch_to_new_tab(pages_before)
             return ActionResult(success=True)
         except Exception:
             pass
         # Fallback: force click (handles overlays)
         try:
-            await self.page.locator(el.selector).first.click(force=True, timeout=5_000)
+            await self.page.locator(el.selector).first.click(
+                force=True, timeout=5_000,
+                delay=40 + random.randint(0, 80),
+            )
             self._log("fallback_used", f"Force click on [{element_id}] {el.name}", detail={
                 "element_id": element_id, "approach": "force_click",
                 "reason": "Normal click failed, likely covered by overlay",
             })
+            await self._switch_to_new_tab(pages_before)
             return ActionResult(success=True)
         except Exception as exc:
             return ActionResult(success=False, error=f"Click failed: {exc}")
+
+    async def _switch_to_new_tab(self, pages_before: set) -> None:
+        """If a click opened a new tab, switch self.page to it."""
+        if not self._context:
+            return
+        # Brief wait for the new page to register
+        await asyncio.sleep(0.3)
+        pages_after = set(self._context.pages)
+        new_pages = pages_after - pages_before
+        if not new_pages:
+            return
+        new_page = new_pages.pop()
+        if new_page.is_closed():
+            return
+        old_url = self.page.url
+        self.page = new_page
+        self._previous_elements = []  # Reset SoM cache
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+        self._log("tab_switched", f"Switched to new tab: {self.page.url}", detail={
+            "old_url": old_url, "new_url": self.page.url,
+        })
+
+    async def _human_type(self, text: str) -> None:
+        """Type text with human-like timing variance."""
+        common_bigrams = {"th", "he", "in", "er", "an", "re", "on", "at", "en", "nd"}
+        for i, ch in enumerate(text):
+            if random.random() < 0.05:
+                delay = 300 + random.randint(0, 300)  # thinking pause
+            elif random.random() < 0.03:
+                delay = 30 + random.randint(0, 20)  # burst
+            else:
+                delay = 80 + random.randint(0, 80)  # normal
+            if i > 0 and text[i - 1:i + 1].lower() in common_bigrams:
+                delay = int(delay * 0.7)
+            await self.page.keyboard.type(ch)
+            await asyncio.sleep(delay / 1000.0)
 
     async def _action_type(self, action: dict) -> ActionResult:
         """Type text into an element. Fallback chain: click+type → fill → contenteditable.
@@ -2018,7 +2402,7 @@ class SessionManager:
                 await locator.click(timeout=3_000)
                 # Triple-click selects all text in the field
                 await locator.click(click_count=3, timeout=1_000)
-                await self.page.keyboard.type(text, delay=50)
+                await self._human_type(text)
                 return ActionResult(success=True)
             except Exception:
                 pass
@@ -2053,7 +2437,7 @@ class SessionManager:
             # Append mode: click to focus, then type at cursor position
             try:
                 await locator.click(timeout=3_000)
-                await self.page.keyboard.type(text, delay=50)
+                await self._human_type(text)
                 return ActionResult(success=True)
             except Exception as exc:
                 return ActionResult(success=False, error=f"Append type failed: {exc}")
@@ -2089,9 +2473,18 @@ class SessionManager:
     async def _action_scroll(self, action: dict) -> ActionResult:
         direction = action.get("direction", "down")
         amount = action.get("scroll_amount", 3)
-        delta_y = 120 * amount * (1 if direction == "down" else -1)
+        sign = 1 if direction == "down" else -1
         try:
-            await self.page.mouse.wheel(0, delta_y)
+            # Human-like scroll: multiple small increments with decaying speed
+            # (mimics trackpad/mousewheel momentum)
+            remaining = 120 * amount
+            while remaining > 0:
+                # Each tick scrolls 60-140px with slight randomness
+                tick = min(remaining, 60 + random.randint(0, 80))
+                await self.page.mouse.wheel(0, tick * sign)
+                remaining -= tick
+                # Brief pause between ticks (momentum feel: 30-80ms)
+                await asyncio.sleep(0.03 + random.random() * 0.05)
             return ActionResult(success=True)
         except Exception as exc:
             return ActionResult(success=False, error=f"Scroll failed: {exc}")
@@ -2199,6 +2592,74 @@ class SessionManager:
             logger.warning("CDP event listener discovery failed: %s", exc)
             return []
 
+    # ===================================================================
+    # CDP Session & JS Evaluation (for observer/learner/executor)
+    # ===================================================================
+
+    async def get_cdp_session(self):
+        """Get a fresh CDP session attached to the current page.
+
+        The caller is responsible for calling detach() when done.
+        Used by observer for setting up Network/Debugger event listeners.
+        """
+        assert self.page is not None and self._context is not None
+        return await self._context.new_cdp_session(self.page)
+
+    async def evaluate_js(self, expression: str, await_promise: bool = True) -> Any:
+        """Thin wrapper over CDP Runtime.evaluate for executor.
+
+        Args:
+            expression: JavaScript expression to evaluate.
+            await_promise: If True, waits for promise resolution.
+
+        Returns:
+            The evaluated result (Python value).
+        """
+        assert self.page is not None
+        if await_promise:
+            return await self.page.evaluate(f"async () => {{ return {expression}; }}")
+        else:
+            return await self.page.evaluate(f"() => {{ return {expression}; }}")
+
+    async def wait_for_dom_stable(self, timeout_ms: int = 5000) -> None:
+        """Wait until no DOM mutations for 500ms, with timeout cap.
+
+        Uses a MutationObserver to detect when the DOM settles.
+        """
+        assert self.page is not None
+        try:
+            await self.page.evaluate(f"""() => new Promise((resolve, reject) => {{
+                let timer = null;
+                const timeout = setTimeout(() => {{
+                    if (observer) observer.disconnect();
+                    resolve();
+                }}, {timeout_ms});
+
+                const observer = new MutationObserver(() => {{
+                    clearTimeout(timer);
+                    timer = setTimeout(() => {{
+                        observer.disconnect();
+                        clearTimeout(timeout);
+                        resolve();
+                    }}, 500);
+                }});
+
+                observer.observe(document.body || document.documentElement, {{
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                }});
+
+                // Start the stability timer (resolves if no mutations within 500ms)
+                timer = setTimeout(() => {{
+                    observer.disconnect();
+                    clearTimeout(timeout);
+                    resolve();
+                }}, 500);
+            }})""")
+        except Exception as exc:
+            logger.debug("wait_for_dom_stable failed: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # CLI Entry Point
@@ -2217,10 +2678,16 @@ if __name__ == "__main__":
                         help="Run Chrome in headless mode (default: true)")
     parser.add_argument("--port", type=int, default=9222,
                         help="Chrome remote debugging port (default: 9222)")
-    parser.add_argument("--max-subtasks", type=int, default=15,
-                        help="Maximum subtasks before stopping (default: 15)")
+    parser.add_argument("--max-subtasks", type=int, default=8,
+                        help="Maximum subtasks before stopping (default: 8)")
     parser.add_argument("--site", default=None,
                         help="Site name from ./sites/ for profile and credentials")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory for trace/step output (default: auto-created in results/)")
+    parser.add_argument("--proxy", default=None,
+                        help="Proxy server URL (e.g. http://user:pass@proxy:8000)")
+    parser.add_argument("--human", action="store_true",
+                        help="Human-in-the-loop mode: you drive the browser, we capture + build graphs")
     args = parser.parse_args()
 
     def _find_chrome() -> str:
@@ -2247,18 +2714,44 @@ if __name__ == "__main__":
             "Chrome not found. Install Google Chrome or pass a running CDP endpoint via --port."
         )
 
-    def _launch_chrome(port: int, headless: bool) -> subprocess.Popen:
-        """Launch Chrome with remote debugging enabled."""
+    def _launch_chrome(port: int, headless: bool, proxy_server: str | None = None) -> subprocess.Popen:
+        """Launch Chrome with full stealth launch args."""
         chrome_bin = _find_chrome()
-        profile_dir = Path.home() / f"chrome-morphnet-{port}"
+        project_root = Path(__file__).parent.parent
+        tmp_dir = project_root / ".tmp" / "chrome-profiles"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir = tmp_dir / f"chrome-morphnet-{port}"
         cmd = [
             chrome_bin,
             f"--remote-debugging-port={port}",
             f"--user-data-dir={profile_dir}",
+            # Noise suppression
             "--no-first-run",
             "--no-default-browser-check",
+            "--disable-default-apps",
+            "--disable-component-update",
+            "--disable-breakpad",
+            "--disable-sync",
+            "--metrics-recording-only",
+            "--disable-dev-shm-usage",
+            "--disable-features=Translate,OptimizationHints,MediaRouter",
+            # Bot-detection evasion
             "--disable-blink-features=AutomationControlled",
+            "--exclude-switches=enable-automation",
+            # Realistic rendering (DO NOT disable GPU — it's a bot tell)
+            "--use-gl=angle",
+            "--use-angle=default",
+            # Window sizing to match viewport
+            "--window-size=1920,1080",
+            "--window-position=0,0",
+            # Misc
+            "--password-store=basic",
+            "--use-mock-keychain",
+            "--force-color-profile=srgb",
+            "--lang=en-US",
         ]
+        if proxy_server:
+            cmd.append(f"--proxy-server={proxy_server}")
         if headless:
             cmd.append("--headless=new")
         logger.info("Launching Chrome: %s", " ".join(cmd[:3]) + " ...")
@@ -2280,11 +2773,398 @@ if __name__ == "__main__":
             time.sleep(0.25)
         raise TimeoutError(f"Chrome CDP not responding on port {port} after {timeout}s")
 
+    def _dump_raw_captures(observation, output_dir: Path) -> None:
+        """Dump all raw captures to human-readable files for inspection."""
+        from dataclasses import asdict
+        raw_dir = output_dir / "raw_captures"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. HTTP traffic — one file per request, full detail
+        http_dir = raw_dir / "http"
+        http_dir.mkdir(exist_ok=True)
+        for i, req in enumerate(observation.http_requests):
+            lines = []
+            lines.append(f"{'='*80}")
+            lines.append(f"REQUEST #{i}: {req.method} {req.url}")
+            lines.append(f"{'='*80}")
+            lines.append(f"Timestamp: {req.timestamp_ms}")
+            lines.append(f"Type: {req.request_type}")
+            if req.graphql_operation_name:
+                lines.append(f"GraphQL op: {req.graphql_operation_name}")
+            if req.jsonrpc_method:
+                lines.append(f"JSON-RPC method: {req.jsonrpc_method}")
+            lines.append(f"Initiator: {req.initiator_type}")
+            lines.append("")
+
+            # Request headers
+            lines.append("--- REQUEST HEADERS ---")
+            for k, v in sorted(req.headers.items()):
+                lines.append(f"  {k}: {v}")
+            lines.append("")
+
+            # Request body
+            if req.body:
+                lines.append("--- REQUEST BODY ---")
+                try:
+                    parsed = json.loads(req.body)
+                    lines.append(json.dumps(parsed, indent=2))
+                except (json.JSONDecodeError, TypeError):
+                    lines.append(req.body)
+                lines.append("")
+
+            # Response
+            lines.append(f"--- RESPONSE {req.response_status} ---")
+            for k, v in sorted(req.response_headers.items()):
+                lines.append(f"  {k}: {v}")
+            lines.append("")
+
+            if req.response_body:
+                lines.append("--- RESPONSE BODY ---")
+                try:
+                    parsed = json.loads(req.response_body)
+                    lines.append(json.dumps(parsed, indent=2)[:5000])
+                except (json.JSONDecodeError, TypeError):
+                    lines.append(req.response_body[:5000])
+                lines.append("")
+
+            # Initiator stack trace
+            if req.initiator_stack:
+                lines.append("--- INITIATOR STACK ---")
+                for frame in req.initiator_stack[:15]:
+                    fn = frame.get("functionName", "(anonymous)")
+                    url = frame.get("url", "")
+                    ln = frame.get("lineNumber", "?")
+                    col = frame.get("columnNumber", "?")
+                    lines.append(f"  {fn} @ {url}:{ln}:{col}")
+
+            path = http_dir / f"{i:03d}_{req.method}_{req.request_type}.txt"
+            path.write_text("\n".join(lines), encoding="utf-8")
+
+        # 2. Scripts — full JS source files
+        scripts_dir = raw_dir / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        for sid, script in observation.scripts.items():
+            fname = f"{sid}_{script.url.split('/')[-1][:60] if script.url else 'inline'}.js"
+            # Clean filename
+            fname = re.sub(r'[^\w\-.]', '_', fname)
+            (scripts_dir / fname).write_text(script.source, encoding="utf-8")
+
+        # 3. Framework fingerprint
+        (raw_dir / "framework_fingerprint.json").write_text(
+            json.dumps(observation.framework_fingerprint, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        # 4. Summary
+        summary_lines = [
+            f"Site: {observation.site}",
+            f"Subtask: {observation.subtask_id}",
+            f"Description: {observation.subtask_description}",
+            f"URL: {observation.start_url} → {observation.end_url}",
+            f"Duration: {observation.end_timestamp_ms - observation.start_timestamp_ms}ms",
+            f"Bundle hash: {observation.bundle_hash}",
+            f"",
+            f"HTTP Requests: {len(observation.http_requests)}",
+            f"Scripts captured: {len(observation.scripts)}",
+            f"DOM snapshots: {len(observation.dom_snapshots)}",
+            f"CU actions: {len(observation.cu_actions)}",
+            f"",
+            "--- HTTP Traffic Summary ---",
+        ]
+        for i, req in enumerate(observation.http_requests):
+            summary_lines.append(
+                f"  [{i:03d}] {req.method} {req.url[:120]} → {req.response_status}"
+            )
+        summary_lines.append("")
+        summary_lines.append("--- Script Files ---")
+        for sid, script in observation.scripts.items():
+            summary_lines.append(
+                f"  [{sid}] {script.url[:100]} ({len(script.source)} bytes)"
+            )
+        (raw_dir / "SUMMARY.txt").write_text("\n".join(summary_lines), encoding="utf-8")
+
+        print(f"\n  Raw captures written to: {raw_dir}")
+        print(f"  HTTP requests: {len(observation.http_requests)} files in http/")
+        print(f"  Scripts: {len(observation.scripts)} files in scripts/")
+
+    def _print_graph(graph) -> None:
+        """Print graph summary to console."""
+        print(f"\n  Graph: {graph.name} ({graph.id[:12]})")
+        print(f"  Nodes: {len(graph.nodes)}  Edges: {len(graph.edges)}  Verified: {graph.verified}")
+        print(f"  Terminal nodes: {graph.terminal_node_ids}")
+        print()
+        for node in graph.nodes:
+            ui = [p.name for p in node.core_parameters if p.role == "user_intent"]
+            ch = [p.name for p in node.core_parameters if p.role == "chained"]
+            co = [p.name for p in node.core_parameters if p.role == "website_generated"]
+            print(f"  Node {node.id}: {node.endpoint_fingerprint}")
+            print(f"    invocation: {node.invocation.type}")
+            if ui: print(f"    user_intent: {ui}")
+            if ch: print(f"    chained:     {ch}")
+            if co: print(f"    constant:    {co}")
+        for edge in graph.edges:
+            print(f"  Edge: {edge.from_node_id} → {edge.to_node_id}")
+            print(f"    {edge.from_extract} → {edge.to_parameter}")
+
+    async def _run_human() -> None:
+        """Human-in-the-loop: subtask by subtask — you drive the browser, we capture + build graphs."""
+        from datetime import datetime
+        from dataclasses import asdict
+        from morphnet.observer import Observer
+        from morphnet.learner import Learner
+        from morphnet.manifest import CUAction
+        from morphnet.trace import TaskTrace
+
+        # Output directory
+        now = datetime.now()
+        output_dir = Path(args.output_dir) if args.output_dir else (
+            Path(__file__).parent.parent / "results" / f"human_{now.strftime('%Y-%m-%d_%H%M%S')}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(name)-25s %(levelname)-5s %(message)s",
+            datefmt="%H:%M:%S",
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler(output_dir / "human_session.log", encoding="utf-8"),
+            ],
+        )
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
+        trace = TaskTrace(task_prompt=args.task, output_dir=output_dir)
+        session = SessionManager(
+            start_url=args.url,
+            task_prompt=args.task,
+            headless=False,
+            chrome_cdp_url=f"http://localhost:{args.port}",
+            site_name=args.site,
+            trace=trace,
+        )
+        await session.start()
+
+        observer = Observer(session)
+        learner = Learner(session)
+        loop = asyncio.get_event_loop()
+
+        print()
+        print("=" * 60)
+        print("HUMAN-IN-THE-LOOP MODE")
+        print("=" * 60)
+        print(f"  Task: {args.task}")
+        print(f"  URL:  {session.page.url}")
+        print(f"  Site: {session.site_name}")
+        print(f"  Output: {output_dir}")
+        print()
+        print("  Flow: perform actions in browser → type 'done' → answer prompts about what you did")
+        print()
+        print("  Commands:")
+        print("    done    — subtask complete, you'll be asked what you did")
+        print("    status  — show capture counts")
+        print("    stop    — end session")
+        print("=" * 60)
+
+        step = 0
+        all_graphs = []
+
+        # Start observer for the entire task
+        await observer.start_task(session.site_name or "unknown", args.task)
+
+        while True:
+            step += 1
+            subtask_id = f"human_{step}_{int(time.time())}"
+            step_dir = output_dir / f"step_{step}"
+            step_dir.mkdir(exist_ok=True)
+
+            # Ask user for the subtask (or suggest the full task on step 1)
+            print(f"\n{'─'*60}")
+            print(f"STEP {step}")
+            print(f"{'─'*60}")
+            if step == 1:
+                print(f"  Full task: {args.task}")
+            print(f"  Current URL: {session.page.url}")
+            print()
+            print("  Perform the next chunk of actions in the browser.")
+            print("  When done, type: done")
+            print()
+
+            # Mark subtask boundary (traffic accumulates)
+            await observer.start_subtask(subtask_id, session.site_name or "unknown", args.task)
+
+            # Wait for user to finish actions in browser
+            stopped = False
+            while True:
+                user_input = await loop.run_in_executor(None, input, "  > ")
+                stripped = user_input.strip()
+
+                if stripped.lower() == "status":
+                    print(f"    HTTP: {len(observer._http_requests)} | "
+                          f"Scripts: {len(observer._scripts)} | "
+                          f"Snapshots: {len(observer._dom_snapshots)}")
+                    continue
+
+                if stripped.lower() == "stop":
+                    await observer.end_subtask(subtask_id, "aborted")
+                    # End task and run learner on full traffic
+                    observation = await observer.end_task()
+                    if observation.http_requests:
+                        print(f"\n  Running learner on full task traffic ({len(observation.http_requests)} HTTP requests)...")
+                        graph = await learner.learn_from_subtask(observation)
+                        if graph:
+                            all_graphs.append(graph)
+                            print(f"  Graph built: {graph.name} (verified={graph.verified})")
+                    stopped = True
+                    break
+
+                if stripped.lower().startswith("done"):
+                    break
+
+                print("    Commands: done, status, stop")
+
+            if stopped:
+                break
+
+            # Collect structured actions via multiple-choice prompts
+            synthetic_actions, action_summary = await _collect_human_actions(loop)
+            for action in synthetic_actions:
+                observer._cu_actions.append(action)
+
+            # Mark subtask end (traffic keeps accumulating)
+            print(f"\n  Finalizing step {step}...")
+            await observer.end_subtask(subtask_id, "success")
+
+            print(f"  Captured so far: {len(observer._http_requests)} HTTP, "
+                  f"{len(observer._scripts)} scripts, "
+                  f"{len(observer._cu_actions)} actions")
+
+            # Ask if user wants to continue
+            cont = await loop.run_in_executor(None, input, "\n  Continue with next step? (yes/no): ")
+            if cont.strip().lower() in ("no", "n", "stop", "quit"):
+                break
+
+        # End task — learner processes full accumulated traffic
+        if not stopped:
+            observation = await observer.end_task()
+            # Patch description with full task
+            observation.subtask_description = f"{args.task}"
+
+            print(f"\n  Running learner on full task traffic ({len(observation.http_requests)} HTTP requests)...")
+            graph = await learner.learn_from_subtask(observation)
+
+            if graph:
+                all_graphs.append(graph)
+                _print_graph(graph)
+
+                graph_path = output_dir / "built_graph.json"
+                graph_path.write_text(
+                    json.dumps(asdict(graph), indent=2, default=str),
+                    encoding="utf-8",
+                )
+                print(f"  Graph JSON: {graph_path}")
+            else:
+                print("  No graph built from task traffic.")
+
+        # Final summary
+        print(f"\n{'='*60}")
+        print("SESSION COMPLETE")
+        print(f"{'='*60}")
+        print(f"  Steps completed: {step}")
+        print(f"  Graphs built: {len(all_graphs)}")
+        for g in all_graphs:
+            print(f"    - {g.name} ({g.id[:12]}): {len(g.nodes)} nodes, {len(g.edges)} edges, verified={g.verified}")
+        print(f"  Output: {output_dir}")
+        print(f"  Log: {output_dir / 'human_session.log'}")
+        print(f"{'='*60}")
+
+        await session.close()
+        trace.close()
+
+    async def _collect_human_actions(loop) -> tuple[list, str]:
+        """Collect structured actions via multiple-choice prompts.
+
+        Returns (list[CUAction], summary_string).
+        """
+        from morphnet.manifest import CUAction
+
+        actions = []
+        summaries = []
+        ts = int(time.time() * 1000)
+
+        while True:
+            print()
+            print("    What did you do?")
+            print("      a) Typed text into a field  (e.g., typed 'Pune' in source station)")
+            print("      b) Clicked a button/link    (e.g., clicked Search, clicked a date)")
+            print("      c) Selected from dropdown   (e.g., picked 'Pune Junction' from suggestions)")
+            print("      d) Describe it myself")
+            print()
+
+            choice = (await loop.run_in_executor(None, input, "    Choice [a/b/c/d]: ")).strip().lower()
+
+            if choice == "a":
+                value = (await loop.run_in_executor(None, input, "    What did you type? (e.g., Pune, 25 April): ")).strip()
+                target = (await loop.run_in_executor(None, input, "    Where did you type it? (e.g., source station, search box, to field): ")).strip()
+                actions.append(CUAction(
+                    timestamp_ms=ts, subtask_id="human", action_type="type",
+                    target_selector="", target_attributes={}, target_text=target,
+                    target_ax_node_id=None, typed_value=value,
+                    cu_reasoning=f"typed '{value}' in {target}",
+                ))
+                summaries.append(f"typed '{value}' in {target}")
+
+            elif choice == "b":
+                target = (await loop.run_in_executor(None, input, "    What did you click? (e.g., Search Trains, Submit, 25 Apr): ")).strip()
+                actions.append(CUAction(
+                    timestamp_ms=ts, subtask_id="human", action_type="click",
+                    target_selector="", target_attributes={}, target_text=target,
+                    target_ax_node_id=None, typed_value=None,
+                    cu_reasoning=f"clicked '{target}'",
+                ))
+                summaries.append(f"clicked '{target}'")
+
+            elif choice == "c":
+                value = (await loop.run_in_executor(None, input, "    What did you select? (e.g., Pune Junction, 25 April 2026): ")).strip()
+                target = (await loop.run_in_executor(None, input, "    From where? (e.g., station suggestions, date picker, dropdown): ")).strip()
+                actions.append(CUAction(
+                    timestamp_ms=ts, subtask_id="human", action_type="select",
+                    target_selector="", target_attributes={}, target_text=target,
+                    target_ax_node_id=None, typed_value=value,
+                    cu_reasoning=f"selected '{value}' from {target}",
+                ))
+                summaries.append(f"selected '{value}' from {target}")
+
+            elif choice == "d":
+                desc = (await loop.run_in_executor(None, input, "    Describe what you did: ")).strip()
+                actions.append(CUAction(
+                    timestamp_ms=ts, subtask_id="human", action_type="human_description",
+                    target_selector="", target_attributes={}, target_text=desc,
+                    target_ax_node_id=None, typed_value=None,
+                    cu_reasoning=desc,
+                ))
+                summaries.append(desc)
+
+            else:
+                print("    Invalid choice. Pick a, b, c, or d.")
+                continue
+
+            ts += 100
+
+            more = (await loop.run_in_executor(None, input, "    More actions? [y/n]: ")).strip().lower()
+            if more not in ("y", "yes"):
+                break
+
+        summary = "; ".join(summaries) if summaries else "no actions described"
+        return actions, summary
+
     async def _run() -> None:
         from morphnet.morphnet_orchestrator import MorphNetOrchestrator
         from morphnet.trace import TaskTrace
 
-        trace = TaskTrace(task_prompt=args.task)
+        output_dir = Path(args.output_dir) if args.output_dir else None
+        trace = TaskTrace(task_prompt=args.task, output_dir=output_dir)
         session = SessionManager(
             start_url=args.url,
             task_prompt=args.task,
@@ -2292,6 +3172,7 @@ if __name__ == "__main__":
             chrome_cdp_url=f"http://localhost:{args.port}",
             site_name=args.site,
             trace=trace,
+            proxy_server=getattr(args, 'proxy', None),
         )
         await session.start()
 
@@ -2310,16 +3191,19 @@ if __name__ == "__main__":
         trace.close()
 
     # --- Launch Chrome and run ------------------------------------------------
-    is_headless = args.headless == "true"
-    print(f"MorphNet — {'headless' if is_headless else 'visible'} mode")
+    is_headless = args.headless == "true" and not args.human
+    print(f"MorphNet — {'human-in-the-loop' if args.human else 'headless' if is_headless else 'visible'} mode")
     print(f"Task: {args.task}")
     print(f"URL:  {args.url}")
     print()
 
-    chrome_proc = _launch_chrome(args.port, is_headless)
+    chrome_proc = _launch_chrome(args.port, is_headless, proxy_server=getattr(args, 'proxy', None))
     try:
         _wait_for_cdp(args.port)
-        asyncio.run(_run())
+        if args.human:
+            asyncio.run(_run_human())
+        else:
+            asyncio.run(_run())
     except KeyboardInterrupt:
         print("\nInterrupted.")
     except Exception as e:

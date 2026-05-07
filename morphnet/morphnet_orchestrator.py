@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,10 +26,17 @@ from morphnet.reflector import Reflector
 from morphnet.computer_use import ComputerUseAgent, SubtaskResult, ActionRecord
 from morphnet.trace import TaskTrace, Evidence
 from morphnet.representation import build_orchestrator_representation
-from morphnet.mcp_manager import MCPManager, MCPToolDefinition
+from morphnet.manifest import (
+    Graph, ExecutionResult, SubtaskObservation,
+    find_candidates, list_graphs, purge_unverified_graphs,
+    promote_graph, discard_graph,
+)
+from morphnet.observer import Observer
+from morphnet.learner import Learner
+from morphnet.executor import Executor
 
 logger = logging.getLogger(__name__)
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 SITES_DIR = Path(__file__).parent / "sites"
 
 
@@ -68,12 +76,12 @@ ORCHESTRATOR_SCHEMA = {
         },
         "routing": {
             "type": "string",
-            "enum": ["computer_use", "mcp"],
-            "description": "Route to CU (discovery) or existing MCP tool.",
+            "enum": ["computer_use", "executor"],
+            "description": "Route to CU (discovery) or existing learned graph tool.",
         },
-        "mcp_tool_name": {
+        "graph_name": {
             "type": "string",
-            "description": "Which MCP tool (if routing='mcp'). Empty for CU.",
+            "description": "Which learned graph tool (if routing='executor'). Empty for CU.",
         },
         "urgency": {
             "type": "string",
@@ -89,6 +97,15 @@ ORCHESTRATOR_SCHEMA = {
             "description": (
                 "If complete_task: the answer. For retrieval: extracted info. "
                 "For mutation: confirmation. Empty if not complete."
+            ),
+        },
+        "task_success": {
+            "type": "boolean",
+            "description": (
+                "If complete_task: did the task ACTUALLY succeed? "
+                "False if you couldn't find the information, the page errored, "
+                "or the result is incomplete/uncertain. True only if you are confident "
+                "the answer fully addresses what was asked."
             ),
         },
         "reasoning": {
@@ -383,59 +400,131 @@ class PlanningTree:
         for child_id in node.children:
             self._render_node(child_id, depth + 1, lines)
 
+    def detect_repeated_approaches(self) -> str | None:
+        """Scan pruned branches for repeated patterns.
+
+        If 2+ pruned branches attempted similar things (based on summary text),
+        return a warning string that gets injected into the planning prompt.
+        This prevents the LLM from endlessly retrying the same failing strategy.
+        """
+        pruned_attempts: list[str] = []
+        for node in self._nodes.values():
+            if node.status == "pruned" and node.summary:
+                pruned_attempts.append(node.summary.what_was_attempted.lower().strip())
+
+        if len(pruned_attempts) < 2:
+            return None
+
+        # Find clusters of similar attempts via simple word overlap
+        from collections import Counter
+        clusters: list[list[str]] = []
+        used = set()
+        for i, a in enumerate(pruned_attempts):
+            if i in used:
+                continue
+            words_a = set(a.split())
+            cluster = [a]
+            used.add(i)
+            for j, b in enumerate(pruned_attempts):
+                if j in used:
+                    continue
+                words_b = set(b.split())
+                overlap = len(words_a & words_b)
+                # >40% word overlap = same approach
+                if overlap > 0.4 * max(len(words_a), len(words_b), 1):
+                    cluster.append(b)
+                    used.add(j)
+            if len(cluster) >= 2:
+                clusters.append(cluster)
+
+        if not clusters:
+            return None
+
+        warnings = []
+        for cluster in clusters:
+            warnings.append(
+                f"  - Tried {len(cluster)} times: \"{cluster[0][:80]}\" (and similar)"
+            )
+        return (
+            "LOOP DETECTED — The following approaches have been tried multiple times and FAILED:\n"
+            + "\n".join(warnings)
+            + "\n\nYou MUST try a FUNDAMENTALLY DIFFERENT approach. Do NOT retry these strategies."
+        )
+
+    def to_mermaid(self) -> str:
+        """Generate Mermaid graph visualization of the planning tree.
+
+        Nodes colored: green=completed, red=pruned, blue=active.
+        Edges labeled with transition type.
+        """
+        if not self._nodes or "plan_0" not in self._nodes:
+            return "graph TD\n    empty[No planning tree]"
+
+        lines = ["graph TD"]
+        self._mermaid_walk("plan_0", lines)
+        lines.append("    classDef success fill:#90EE90,stroke:#333")
+        lines.append("    classDef failure fill:#FFB6C1,stroke:#333")
+        lines.append("    classDef active fill:#87CEEB,stroke:#333")
+        return "\n".join(lines)
+
+    def _mermaid_walk(self, node_id: str, lines: list[str]) -> None:
+        node = self._nodes[node_id]
+        # Sanitize label for Mermaid (escape quotes)
+        label = node.intent[:40].replace('"', "'").replace("\n", " ")
+        safe_id = node_id.replace(".", "_")
+
+        style = {
+            "completed": ":::success",
+            "pruned": ":::failure",
+            "active": ":::active",
+        }.get(node.status, "")
+        lines.append(f'    {safe_id}["{label}"]{style}')
+
+        for child_id in node.children:
+            child = self._nodes.get(child_id)
+            if not child:
+                continue
+            safe_child = child_id.replace(".", "_")
+            edge_label = "prune" if child.status == "pruned" else "branch"
+            lines.append(f'    {safe_id} -->|{edge_label}| {safe_child}')
+            self._mermaid_walk(child_id, lines)
+
+    def save_visualization(self, output_dir) -> None:
+        """Save Mermaid visualization to trace output directory."""
+        from pathlib import Path
+        path = Path(output_dir) / "planning_tree.mermaid"
+        path.write_text(self.to_mermaid())
+
 
 # ---------------------------------------------------------------------------
-# MCP Lifecycle Tracking
+# User Intent Extraction Schema (called by orchestrator for executor)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class MCPToolStatus:
-    tool_name: str
-    status: str = "verified"   # "verified" | "trusted" | "degraded" | "discarded"
-    consecutive_successes: int = 0
-    consecutive_failures: int = 0
-    last_failure_reason: str | None = None
+def _build_intent_schema(param_descriptors: list[dict]) -> dict:
+    """Build a Gemini-compatible schema for per-node user_intent extraction.
 
-
-def update_mcp_status(
-    tool: MCPToolStatus,
-    success: bool,
-    failure_reason: str | None = None,
-) -> None:
-    """Update MCP lifecycle status based on outcome.
-
-    Transitions:
-    - verified + 3 consecutive successes → trusted
-    - trusted + 1 failure → degraded
-    - degraded + 2 more consecutive failures → discarded
-    - any state + 3 consecutive failures → discarded
-    - discarded tools are never routed to again
+    Each property is keyed by '{node_id}_{param_name}' to avoid deduplication
+    when multiple nodes share the same param name (e.g., searchString on both
+    source and destination auto-suggest).
     """
-    if success:
-        tool.consecutive_successes += 1
-        tool.consecutive_failures = 0
-        tool.last_failure_reason = None
-
-        if tool.status == "verified" and tool.consecutive_successes >= 3:
-            tool.status = "trusted"
-        elif tool.status == "degraded" and tool.consecutive_successes >= 3:
-            tool.status = "trusted"
-    else:
-        tool.consecutive_failures += 1
-        tool.consecutive_successes = 0
-        tool.last_failure_reason = failure_reason
-
-        match tool.status:
-            case "trusted":
-                tool.status = "degraded"
-            case "degraded":
-                if tool.consecutive_failures >= 3:
-                    tool.status = "discarded"
-            case "verified":
-                if tool.consecutive_failures >= 3:
-                    tool.status = "discarded"
-            case "discarded":
-                pass  # Already discarded
+    properties = {}
+    for pd in param_descriptors:
+        key = pd["key"]
+        desc = pd["node_description"] or ""
+        example = pd.get("example_value", "")
+        properties[key] = {
+            "type": "string",
+            "description": (
+                f"Value for '{pd['param_name']}' in step: {desc}. "
+                f"Example: {example}. Match the example format."
+            ),
+            "nullable": True,
+        }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties.keys()),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +539,7 @@ class TaskResult:
     planning_tree_summary: str
     website_insights: list[str]
     total_actions: int
-    total_mcp_calls: int
+    total_executor_calls: int
 
 
 # ---------------------------------------------------------------------------
@@ -461,20 +550,39 @@ class MorphNetOrchestrator:
     """Task planner and router.
 
     Receives a natural language task + start URL. Decomposes into subtasks.
-    Routes each to CU or MCP. Manages planning tree and MCP lifecycle.
+    Routes each to CU or executor. Manages planning tree and graph lifecycle.
+
+    Three-layer architecture:
+    - Observer: always-on capture during CU sessions
+    - Learner: post-subtask graph builder (background task)
+    - Executor: deterministic graph runner (no LLM)
     """
 
     def __init__(self, session: SessionManager, trace: TaskTrace):
         self.session = session
         self.trace = trace
         self.reflector = Reflector(session, trace)
-        self.cu_agent = ComputerUseAgent(session, self.reflector, trace)
-        self.mcp_manager = MCPManager(session, self.reflector, trace)
+
+        # Observer captures CU actions + HTTP traffic
+        self.observer = Observer(session)
+
+        # CU agent with observer attached
+        self.cu_agent = ComputerUseAgent(session, self.reflector, trace, observer=self.observer)
+
+        # Learner builds graphs from observations (background)
+        self.learner = Learner(session)
+
+        # Executor runs learned graphs deterministically
+        self.executor = Executor(session)
+
+        # Background learner tasks (awaited before session cleanup)
+
         self.planning_tree = PlanningTree()
-        self._mcp_statuses: dict[str, MCPToolStatus] = {}
         self._website_insights: list[str] = []
         self._orchestrator_prompt = self._load_prompt("orchestrator_plan.txt")
-        self._load_mcp_tools()
+
+        # State for response-aware orchestration
+        self._last_executor_response: str | None = None
 
     @staticmethod
     def _load_prompt(filename: str) -> str:
@@ -487,50 +595,101 @@ class MorphNetOrchestrator:
     def _log(self, event_type: str, summary: str, **kwargs) -> str | None:
         return self.trace.log("orchestrator", event_type, summary, **kwargs)
 
-    def _load_mcp_tools(self) -> None:
-        """Load MCP tool definitions from sites/{site_name}/tools.json."""
-        site_name = self.session.site_name
-        if not site_name:
-            return
-        tools_path = SITES_DIR / site_name / "tools.json"
-        if not tools_path.exists():
-            return
-        try:
-            tools = json.loads(tools_path.read_text())
-            for tool in tools:
-                name = tool.get("name", "")
-                if name:
-                    self._mcp_statuses[name] = MCPToolStatus(
-                        tool_name=name,
-                        status=tool.get("status", "verified"),
-                    )
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Failed to load MCP tools: %s", exc)
+    def _get_available_graphs_summary(self) -> str:
+        """Build learned graph tools summary for orchestrator prompt.
 
-    def _get_available_mcp_summary(self) -> str:
-        """Build MCP tools summary for orchestrator prompt."""
-        if not self._mcp_statuses:
-            return "(no MCP tools available)"
+        Shows graph name, capability, verified status, and per-node user_intent params
+        so the planner can see that same-named params serve different roles.
+        """
+        site = self.session.site_name
+        if not site:
+            return "(no learned graph tools available)"
+
+        graphs = list_graphs(site)
+        if not graphs:
+            return "(no learned graph tools available)"
 
         lines: list[str] = []
-        for name, status in self._mcp_statuses.items():
-            if status.status == "discarded":
-                continue
-            marker = {
-                "trusted": "[TRUSTED]",
-                "verified": "[verified]",
-                "degraded": "[DEGRADED — use with caution]",
-            }.get(status.status, f"[{status.status}]")
-            lines.append(f"  {name} {marker}")
-            # Include tool description so planner knows when to route
-            tool_def = self.mcp_manager.get_tool(name)
-            if tool_def:
-                lines.append(f"    {tool_def.description[:120]}")
-                lines.append(f"    Endpoint: {tool_def.method} {tool_def.protocol}")
-            if status.last_failure_reason:
-                lines.append(f"    Last failure: {status.last_failure_reason}")
+        for graph in graphs:
+            stats = graph.execution_stats
+            runs = stats.get("runs", 0)
+            successes = stats.get("successes", 0)
+            if graph.verified:
+                marker = "[verified]"
+            elif not graph.verification_only_read:
+                marker = "[probationary]"
+            else:
+                marker = "[unverified]"
+            lines.append(f"  {graph.name} {marker}")
+            lines.append(f"    {graph.capability_statement}")
+            if runs > 0:
+                lines.append(f"    Stats: {successes}/{runs} successful executions")
+            # Show per-node user_intent params with node descriptions
+            intent_lines: list[str] = []
+            for node in graph.nodes:
+                node_intents = [p for p in node.core_parameters if p.role == "user_intent"]
+                if node_intents:
+                    desc = node.node_description or node.endpoint_fingerprint
+                    param_names = ", ".join(p.name for p in node_intents)
+                    intent_lines.append(f"      {node.id} ({desc}): {param_names}")
+            if intent_lines:
+                lines.append("    Steps requiring input:")
+                lines.extend(intent_lines)
 
-        return "\n".join(lines) if lines else "(no available MCP tools)"
+        return "\n".join(lines) if lines else "(no learned graph tools available)"
+
+    def _find_graph(self, graph_name: str) -> Graph | None:
+        """Look up a graph by name from the current site's graph store."""
+        site = self.session.site_name
+        if not site:
+            return None
+        graphs = list_graphs(site)
+        return next((g for g in graphs if g.name == graph_name), None)
+
+    def _build_response_summary(self, exec_result: ExecutionResult, graph: Graph) -> str:
+        """Build text summary from the last node executed in the graph.
+
+        The last node is the terminal result of the workflow (e.g., train
+        search results). Intermediate and parallel nodes are irrelevant to
+        the planner — only the final output matters.
+        """
+        if not exec_result.node_outputs:
+            return ""
+
+        # Find the last node that produced output (by graph execution order)
+        last_node_id = None
+        last_data = None
+        for node_id, data in exec_result.node_outputs.items():
+            if node_id.startswith("__"):
+                continue
+            last_node_id = node_id
+            last_data = data
+
+        if last_node_id is None or last_data is None:
+            return ""
+
+        node_lookup = {n.id: n for n in graph.nodes}
+        node = node_lookup.get(last_node_id)
+        desc = node.node_description or node.endpoint_fingerprint if node else last_node_id
+
+        truncated = self._truncate_for_summary(last_data, max_items=20)
+        data_str = json.dumps(truncated, indent=2, default=str)
+        if len(data_str) > 5000:
+            data_str = data_str[:5000] + "\n... (truncated)"
+
+        return f"[{last_node_id}] {desc}:\n{data_str}"
+
+    @staticmethod
+    def _truncate_for_summary(data: Any, max_items: int = 20) -> Any:
+        """Recursively truncate arrays and cap depth for context efficiency."""
+        if isinstance(data, list):
+            truncated = [MorphNetOrchestrator._truncate_for_summary(item, max_items) for item in data[:max_items]]
+            if len(data) > max_items:
+                truncated.append(f"... ({len(data) - max_items} more items)")
+            return truncated
+        if isinstance(data, dict):
+            return {k: MorphNetOrchestrator._truncate_for_summary(v, max_items) for k, v in data.items()}
+        return data
 
     # ===================================================================
     # Main Loop
@@ -555,15 +714,22 @@ class MorphNetOrchestrator:
         self._log("task_started", f"Task: {task_prompt[:80]}", detail={
             "task_prompt": task_prompt,
             "max_subtasks": max_subtasks,
-            "mcp_tools": list(self._mcp_statuses.keys()),
         })
+
+        # Start observer for the entire task (accumulates across subtasks)
+        site = self.session.site_name or "unknown"
+        try:
+            await self.observer.start_task(site, task_prompt)
+        except Exception as exc:
+            logger.warning("Observer start_task failed (non-fatal): %s", exc)
 
         self.planning_tree.create_root(task_prompt)
         # Branch immediately so the root is never completed/pruned directly
         # (completing root sets current_id=None since root has no parent).
         self.planning_tree.branch("Initial approach")
+
         total_actions = 0
-        total_mcp_calls = 0
+        total_executor_calls = 0
         subtasks_completed = 0
 
         for step in range(1, max_subtasks + 1):
@@ -576,12 +742,21 @@ class MorphNetOrchestrator:
                     current_title = await self.session.page.title()
                     break
                 except Exception as e:
-                    if "context was destroyed" in str(e).lower() and _retry < 2:
-                        logger.warning("Orchestrator extraction: context destroyed (retry %d/2)", _retry + 1)
+                    err_msg = str(e).lower()
+                    if ("context was destroyed" in err_msg
+                            or "has been closed" in err_msg) and _retry < 2:
+                        logger.warning("Orchestrator extraction: page error (retry %d/2): %s", _retry + 1, str(e)[:100])
                         try:
-                            await self.session.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                            # Try to recover by creating a fresh page
+                            self.session.page = await self.session._context.new_page()
+                            await self.session.page.goto(
+                                self.session.start_url,
+                                wait_until="domcontentloaded",
+                                timeout=15_000,
+                            )
+                            await self.session.wait_for_page_ready()
                         except Exception:
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(2)
                         continue
                     raise
 
@@ -599,7 +774,10 @@ class MorphNetOrchestrator:
             dom_tree = await self.session.get_dom_tree(max_length=100_000)
             dom_summary = build_dom_summary(dom_tree)
             tree_context = self.planning_tree.get_context_for_planning()
-            mcp_summary = self._get_available_mcp_summary()
+            loop_warning = self.planning_tree.detect_repeated_approaches()
+            if loop_warning:
+                tree_context += "\n\n" + loop_warning
+            mcp_summary = self._get_available_graphs_summary()
             profile_summary = self._get_website_profile_summary()
 
             # 3. Determine urgency
@@ -637,10 +815,17 @@ class MorphNetOrchestrator:
             match planning_action:
                 case "complete_task":
                     final_answer = plan.get("final_answer", "")
-                    self._log("task_completed", f"Task complete: {final_answer[:80]}", detail={
+
+                    # Use the model's structured task_success field directly.
+                    # The Gemini schema enforces this boolean — no text matching needed.
+                    actual_success = plan.get("task_success", False)
+
+                    self._log("task_completed", f"Task complete (success={actual_success}): {final_answer[:80]}", detail={
                         "final_answer": final_answer,
                         "steps_used": step,
-                    }, outcome="success")
+                        "task_success": actual_success,
+                        "confidence": plan.get("confidence", 0),
+                    }, outcome="success" if actual_success else "failure")
 
                     # Save insights
                     if plan.get("website_insights"):
@@ -649,14 +834,20 @@ class MorphNetOrchestrator:
                     if self._website_insights:
                         await self._save_website_insights()
 
+                    # Save planning tree visualization
+                    self.planning_tree.save_visualization(self.trace.output_dir)
+
+                    # End observer → learner processes full task traffic
+                    await self._end_task_and_learn()
+
                     return TaskResult(
-                        success=True,
+                        success=actual_success,
                         final_answer=final_answer,
                         subtasks_completed=subtasks_completed,
                         planning_tree_summary=self.planning_tree.get_context_for_planning(),
                         website_insights=self._website_insights,
                         total_actions=total_actions,
-                        total_mcp_calls=total_mcp_calls,
+                        total_executor_calls=total_executor_calls,
                     )
 
                 case "branch":
@@ -680,136 +871,103 @@ class MorphNetOrchestrator:
             # 6. Execute subtask (planning_action == "continue")
             subtask = plan.get("next_subtask", "")
             routing = plan.get("routing", "computer_use")
-            subtask_start_time = time.time()
+            subtask_id = f"subtask_{step}_{int(time.time())}"
 
-            match routing:
-                case "computer_use":
-                    result = await self.cu_agent.execute_subtask(subtask)
-                    total_actions += result.steps_used
+            # 6a. Try executor first if routing='executor' or candidates exist
+            executor_succeeded = False
+            if routing == "executor":
+                graph_name = plan.get("graph_name", "")
+                exec_result = await self._try_executor(subtask, graph_name, subtask_id)
+                graph = self._find_graph(graph_name)
+                is_probationary = graph and not graph.verified and not graph.verification_only_read
 
-                case "mcp":
-                    tool_name = plan.get("mcp_tool_name", "")
-                    mcp_ok = False
-                    mcp_result = None  # Track for A/B learning
-                    if tool_name and tool_name in self._mcp_statuses:
-                        status = self._mcp_statuses[tool_name]
-                        if status.status != "discarded":
-                            try:
-                                mcp_result = await self.mcp_manager.execute_tool(
-                                    tool_name, subtask,
-                                )
-                                total_mcp_calls += 1
-                            except Exception as exc:
-                                logger.warning("MCP execute_tool crashed for '%s': %s", tool_name, exc)
-                                mcp_result = {"success": False, "error": str(exc), "status_code": 0}
+                if exec_result and exec_result.status == "success":
+                    executor_succeeded = True
+                    total_executor_calls += 1
 
-                            if mcp_result.get("success"):
-                                # Reflect on MCP result — pass response template for structural check
-                                tool_def = self.mcp_manager.get_tool(tool_name)
-                                mcp_verdict = await self.reflector.reflect_on_mcp_call(
-                                    tool_name=tool_name,
-                                    tool_intent=subtask,
-                                    http_status=mcp_result.get("status_code", 0),
-                                    response_body=mcp_result.get("response_body"),
-                                    response_template=(
-                                        tool_def.response_template
-                                        if tool_def else None
-                                    ),
-                                )
+                    # Probationary write-op graph succeeded — promote to verified
+                    if is_probationary and graph:
+                        promote_graph(graph.site, graph.id)
+                        self._log("graph_promoted", f"Probationary graph promoted: {graph_name}", detail={
+                            "graph_id": graph.id[:12], "graph_name": graph_name,
+                        })
 
-                                # Update lifecycle
-                                update_mcp_status(
-                                    status,
-                                    mcp_verdict.get("success", False),
-                                    mcp_verdict.get("failure_reason"),
-                                )
+                    # Build response summary from node_outputs
+                    response_summary = self._build_response_summary(exec_result, graph) if graph else ""
 
-                                # Build SubtaskResult for planning tree
-                                mcp_action = ActionRecord(
-                                    step=1,
-                                    action={"action_type": "mcp_call", "tool": tool_name},
-                                    reflection=mcp_verdict,
-                                    one_line_summary=(
-                                        f"Step 1: MCP {tool_name} → "
-                                        f"{'success' if mcp_verdict.get('success') else 'failure'}: "
-                                        f"{mcp_verdict.get('response_summary', '')[:60]}"
-                                    ),
-                                )
-                                result = SubtaskResult(
-                                    success=mcp_verdict.get("success", False),
-                                    actions_taken=[mcp_action],
-                                    subtask_reflection={
-                                        "subtask_achieved": mcp_verdict.get("success", False),
-                                        "outcome_summary": mcp_verdict.get("response_summary", ""),
-                                        "reasoning": mcp_verdict.get("reasoning", ""),
-                                        "recommendation": mcp_verdict.get("recommendation", "proceed_to_next_subtask"),
-                                        "failure_analysis": mcp_verdict.get("failure_reason", ""),
-                                        "extracted_data": mcp_verdict.get("response_summary"),
-                                    },
-                                    final_url=self.session.page.url if self.session.page else "",
-                                    final_elements=[],
-                                    extracted_data=mcp_verdict.get("response_summary"),
-                                    notes=[],
-                                    traffic_during_subtask=[],
-                                    steps_used=1,
-                                )
-                                mcp_ok = True
-                            else:
-                                # MCP execution failed — degrade and fall back to CU
-                                error_msg = mcp_result.get("error", "unknown error")
-                                logger.warning("MCP '%s' failed: %s. Falling back to CU.", tool_name, error_msg[:100])
-                                self._log("mcp_fallback_to_cu", f"MCP {tool_name} failed, falling back to CU", detail={
-                                    "tool_name": tool_name,
-                                    "error": error_msg[:200],
-                                    "subtask": subtask[:100],
-                                })
-                                update_mcp_status(status, False, error_msg[:200])
+                    # Store for next planning loop
+                    self._last_executor_response = response_summary or None
 
-                    if not mcp_ok:
-                        # Fall back to CU: tool not found, discarded, or execution failed
-                        subtask_start_for_cu = time.time()
-                        result = await self.cu_agent.execute_subtask(subtask)
-                        total_actions += result.steps_used
-
-                        # A/B learning: compare MCP failure vs CU success
-                        if result.success and tool_name and mcp_result:
-                            try:
-                                await self.mcp_manager.learn_from_cu_fallback(
-                                    tool_name=tool_name,
-                                    failed_mcp_result=mcp_result,
-                                    cu_traffic_since=subtask_start_for_cu,
-                                    subtask=subtask,
-                                )
-                            except Exception as exc:
-                                logger.warning("A/B learning failed: %s", exc)
-
-                case _:
-                    logger.warning("Unknown routing '%s'. Using CU.", routing)
-                    result = await self.cu_agent.execute_subtask(subtask)
-                    total_actions += result.steps_used
-
-            # 6b. Discover MCP tools from successful CU traffic
-            if result.success and routing == "computer_use":
-                try:
-                    discovered = await self.mcp_manager.discover_tools_from_subtask(
-                        traffic_since=subtask_start_time,
-                        subtask_description=subtask,
+                    result = SubtaskResult(
+                        success=True,
+                        actions_taken=[ActionRecord(
+                            step=1,
+                            action={"action_type": "executor_call", "graph": graph_name},
+                            reflection={"verdict": {"success": True, "what_changed": "Graph executed successfully"}},
+                            one_line_summary=f"Step 1: Executor {graph_name} → success",
+                        )],
+                        subtask_reflection={
+                            "subtask_achieved": True,
+                            "outcome_summary": f"Executor completed: {graph_name}",
+                            "reasoning": "Graph executed deterministically",
+                            "recommendation": "proceed_to_next_subtask",
+                            "extracted_data": response_summary[:2000] if response_summary else None,
+                        },
+                        final_url=self.session.page.url if self.session.page else "",
+                        final_elements=[],
+                        extracted_data=response_summary[:2000] if response_summary else None,
+                        notes=[],
+                        traffic_during_subtask=[],
+                        steps_used=1,
                     )
-                    for tool in discovered:
-                        if tool.name not in self._mcp_statuses:
-                            self._mcp_statuses[tool.name] = MCPToolStatus(
-                                tool_name=tool.name,
-                            )
-                            self._log(
-                                "tool_discovered",
-                                f"MCP tool discovered: {tool.name}",
-                                detail={
-                                    "tool_name": tool.name,
-                                    "endpoint": tool.endpoint_identity,
-                                },
-                            )
+                    self._log("executor_success", f"Executor succeeded: {graph_name}", detail={
+                        "graph_name": graph_name, "subtask": subtask[:100],
+                        "response_summary_length": len(response_summary),
+                        "response_summary_preview": response_summary[:200] if response_summary else None,
+                    })
+                elif exec_result:
+                    # Executor failed
+                    if is_probationary and graph:
+                        # Probationary write-op graph failed — discard it
+                        discard_graph(graph.site, graph.id)
+                        self._log("graph_discarded", f"Probationary graph discarded: {graph_name}", detail={
+                            "graph_id": graph.id[:12], "graph_name": graph_name,
+                            "reason": exec_result.reason or exec_result.status,
+                        })
+                    self._log("executor_fallback_to_cu", f"Executor failed ({exec_result.status}), falling back to CU", detail={
+                        "graph_name": graph_name, "status": exec_result.status,
+                        "reason": exec_result.reason or "", "subtask": subtask[:100],
+                    })
+
+            # 6b. Fall back to CU if executor didn't succeed
+            if not executor_succeeded:
+                # Mark subtask boundary for observer (no reset — traffic accumulates)
+                try:
+                    await self.observer.start_subtask(subtask_id, self.session.site_name or "unknown", subtask)
                 except Exception as exc:
-                    logger.warning("MCP discovery failed: %s", exc)
+                    logger.warning("Observer start_subtask failed (non-fatal): %s", exc)
+
+                try:
+                    result = await self.cu_agent.execute_subtask(subtask)
+                except Exception as exc:
+                    logger.error("CU execute_subtask crashed: %s", exc)
+                    self._log("cu_crash", f"CU crashed: {exc}", detail={"subtask": subtask[:200], "error": str(exc)[:500]}, outcome="failure")
+                    result = SubtaskResult(
+                        success=False, actions_taken=[], subtask_reflection={
+                            "subtask_achieved": False, "outcome_summary": f"CU agent crashed: {exc}",
+                            "recommendation": "retry_different_approach", "failure_analysis": str(exc)[:300],
+                        },
+                        final_url=self.session.page.url if self.session.page else "",
+                        final_elements=[], extracted_data=None, notes=[], traffic_during_subtask=[], steps_used=0,
+                    )
+                total_actions += result.steps_used
+
+                # Mark subtask end (observer keeps accumulating)
+                try:
+                    verdict = "success" if result.success else "failure"
+                    await self.observer.end_subtask(subtask_id, verdict)
+                except Exception as exc:
+                    logger.warning("Observer end_subtask failed (non-fatal): %s", exc)
 
             # 7. Update planning tree based on reflection
             reflection = result.subtask_reflection
@@ -845,20 +1003,19 @@ class MorphNetOrchestrator:
                     case _:
                         self.planning_tree.prune(failure_reason, summary)
 
-            # 8. Update MCP lifecycle if MCP was used
-            if routing == "mcp" and plan.get("mcp_tool_name"):
-                tool_name = plan["mcp_tool_name"]
-                if tool_name in self._mcp_statuses:
-                    update_mcp_status(
-                        self._mcp_statuses[tool_name],
-                        reflection.get("subtask_achieved", False),
-                        reflection.get("mcp_failure_reason"),
-                    )
-
-            # 9. Save website insights
+            # 8. Save website insights
             if plan.get("website_insights"):
                 self._website_insights.append(plan["website_insights"])
                 await self._save_website_insights()
+
+            # 9. Memory cleanup between subtasks
+            try:
+                await self.session.cleanup_between_subtasks()
+            except Exception:
+                pass
+
+            # 10. Human-like pause between subtasks (bot detection mitigation)
+            await asyncio.sleep(2.0 + random.random() * 3.0)
 
         # Budget exhausted
         self._log("task_budget_exhausted", f"Budget exhausted after {max_subtasks} subtasks", detail={
@@ -869,6 +1026,12 @@ class MorphNetOrchestrator:
         if self._website_insights:
             await self._save_website_insights()
 
+        # Save planning tree visualization
+        self.planning_tree.save_visualization(self.trace.output_dir)
+
+        # End observer → learner processes full task traffic
+        await self._end_task_and_learn()
+
         return TaskResult(
             success=False,
             final_answer=None,
@@ -876,8 +1039,153 @@ class MorphNetOrchestrator:
             planning_tree_summary=self.planning_tree.get_context_for_planning(),
             website_insights=self._website_insights,
             total_actions=total_actions,
-            total_mcp_calls=total_mcp_calls,
+            total_executor_calls=total_executor_calls,
         )
+
+    # ===================================================================
+    # Executor + Learner Helpers
+    # ===================================================================
+
+    async def _try_executor(
+        self,
+        subtask: str,
+        graph_name: str,
+        subtask_id: str,
+    ) -> ExecutionResult | None:
+        """Try to execute a subtask using a learned graph.
+
+        1. Find candidate graphs matching the subtask and current page.
+        2. If graph_name specified, prefer that; otherwise take best candidate.
+        3. Extract user_intent params via LLM.
+        4. Call executor.execute().
+        5. Return result or None if no candidates found.
+        """
+        site = self.session.site_name
+        if not site:
+            return None
+
+        current_url = self.session.page.url if self.session.page else ""
+
+        # Find candidate graphs
+        candidates = find_candidates(site, subtask, current_url)
+        if not candidates:
+            logger.info("No candidate graphs for subtask: %s", subtask[:80])
+            return None
+
+        # Prefer the named graph if it exists in candidates
+        graph = None
+        if graph_name:
+            graph = next((g for g in candidates if g.name == graph_name), None)
+        if graph is None:
+            # Take the first candidate (find_candidates returns them ranked)
+            graph = candidates[0]
+
+        # Extract user_intent parameters via LLM
+        try:
+            user_intent = await self._extract_user_intent(subtask, graph)
+        except Exception as exc:
+            logger.warning("Intent extraction failed: %s", exc)
+            return None
+
+        # Execute the graph
+        try:
+            result = await self.executor.execute(graph, user_intent, subtask_context=subtask)
+            self._log("executor_attempt", f"Graph {graph.name}: {result.status}", detail={
+                "graph_id": graph.id[:12],
+                "graph_name": graph.name,
+                "status": result.status,
+                "subtask": subtask[:100],
+            })
+            return result
+        except Exception as exc:
+            logger.error("Executor crashed on graph %s: %s", graph.name, exc)
+            return ExecutionResult(
+                status="execution_error",
+                reason=f"Executor crash: {str(exc)[:200]}",
+            )
+
+    async def _end_task_and_learn(self) -> None:
+        """End observer, feed full task traffic to learner, purge unverified noise."""
+        try:
+            observation = await self.observer.end_task()
+            if observation.http_requests:
+                logger.info("Task ended: %d HTTP requests captured — running learner",
+                            len(observation.http_requests))
+                await self._run_learner_safe(observation)
+            else:
+                logger.info("Task ended: no HTTP traffic captured — skipping learner")
+        except Exception as exc:
+            logger.warning("end_task / learner failed: %s", exc)
+
+        # Clean up: remove any unverified graphs (noisy CU retries, duplicates)
+        site = self.session.site_name
+        if site:
+            removed = purge_unverified_graphs(site)
+            if removed:
+                logger.info("Purged %d unverified graph(s) for %s", removed, site)
+
+    async def _run_learner_safe(self, observation: SubtaskObservation) -> None:
+        """Background wrapper for learner — exceptions logged, never propagated."""
+        try:
+            graph = await self.learner.learn_from_subtask(observation)
+            if graph:
+                logger.info("Learner produced graph: %s (%s)", graph.name, graph.id[:12])
+        except Exception:
+            logger.exception("Learner failed for subtask %s", observation.subtask_id)
+
+    async def _extract_user_intent(
+        self,
+        subtask: str,
+        graph: Graph,
+    ) -> dict[str, dict[str, Any]]:
+        """Per-node user_intent extraction.
+
+        Returns {node_id: {param_name: value}} so same-named params on different
+        nodes (e.g., searchString on source vs destination auto-suggest) get
+        distinct values.
+        """
+        # Build per-node descriptors
+        param_descriptors: list[dict] = []
+        for node in graph.nodes:
+            for param in node.core_parameters:
+                if param.role == "user_intent":
+                    param_descriptors.append({
+                        "key": f"{node.id}_{param.name}",
+                        "node_id": node.id,
+                        "param_name": param.name,
+                        "node_description": node.node_description or node.cu_reasoning_sample[:100],
+                        "example_value": str(param.value_example) if param.value_example else "",
+                    })
+
+        if not param_descriptors:
+            return {}
+
+        extraction_prompt = (
+            f"Subtask: {subtask}\n\n"
+            f"Graph capability: {graph.capability_statement}\n\n"
+            f"Parameters to extract (each belongs to a specific workflow step):\n"
+            + "\n".join(
+                f"  - {pd['key']}: {pd['node_description']} → param '{pd['param_name']}' (example: {pd['example_value']})"
+                for pd in param_descriptors
+            )
+        )
+
+        schema = _build_intent_schema(param_descriptors)
+        raw = call_gemini(
+            model="gemini-3-flash-preview",
+            contents=[extraction_prompt],
+            response_schema=schema,
+            system_instruction=self._load_prompt("intent_extraction.txt"),
+            generation_config={"temperature": 0.1, "max_output_tokens": 1024},
+        )
+
+        # Reshape flat {node_id_param: value} → {node_id: {param: value}}
+        result: dict[str, dict[str, Any]] = {}
+        for pd in param_descriptors:
+            value = raw.get(pd["key"])
+            if value is not None:
+                result.setdefault(pd["node_id"], {})[pd["param_name"]] = value
+        return result
 
     # ===================================================================
     # Planner Call
@@ -905,9 +1213,28 @@ class MorphNetOrchestrator:
             f"Current Page (AXTree):\n{axtree_view[:6000]}\n\n"
             f"DOM Summary:\n{dom_summary[:2000]}\n\n"
             f"Planning Tree:\n{tree_context[:3000]}\n\n"
-            f"MCP Tools:\n{mcp_summary}\n\n"
+            f"Learned Graph Tools:\n{mcp_summary}\n\n"
             f"Website Profile:\n{profile_summary}\n"
         )
+
+        # Inject user credentials if available (for booking, form-filling, etc.)
+        creds = self.session.get_credentials()
+        if creds:
+            user = creds.get("user", {})
+            if user:
+                prompt += f"\nUser Info (for forms/booking):\n"
+                for k, v in user.items():
+                    prompt += f"  {k}: {v}\n"
+
+        # Inject executor response data if available from previous step
+        if self._last_executor_response:
+            prompt += (
+                f"\n\nExecutor API Response Data:\n{self._last_executor_response[:5000]}\n\n"
+                "The above data was returned by API calls the executor just made. "
+                "If the task's answer is in this data, use complete_task and answer directly. "
+                "Do NOT fall back to CU to 'read the page' when API data already has the answer."
+            )
+            self._last_executor_response = None
 
         with self.trace.span("orchestrator", "plan_decision", f"Plan step {step}") as span:
             plan = call_gemini(

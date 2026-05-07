@@ -20,13 +20,16 @@ classifiers = [
 
 dependencies = [
     "google-genai",
-    "playwright",
     "python-dotenv",
     "httpx",
     "pydantic",
     "pyyaml",
     "pillow>=12.1.1",
     "curl-cffi>=0.14.0",
+    "adblock>=0.6.0",
+    "rebrowser-playwright>=1.52.0",
+    "playwright-stealth>=2.0.3",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]

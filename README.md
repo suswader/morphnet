@@ -1,272 +1,332 @@
 # MorphNet
 
-MorphNet transforms volatile, expensive computer use (CU) into stable, fast, affordable MCP tool calls. Use CU as a **discovery mechanism** — observe successful browser interactions, capture HTTP traffic, identify deterministic request patterns, and crystallize these into reusable MCP tools. Over time, the system shifts from unreliable browser automation to deterministic API-level execution. **CU is discovery infrastructure, not the end state.**
+MorphNet transforms browser automation (computer use) into reusable API tools. CU is discovery infrastructure -- observe successful browser interactions, capture HTTP traffic with initiator stack traces, and crystallize patterns into deterministic execution graphs that invoke the website's own JavaScript via CDP. Over time, CU gets replaced by fast API-level execution.
+
+**Thesis:** The website's own JavaScript code builds every HTTP request correctly. We keep that code running in a persistent browser session and invoke it via CDP rather than reconstructing its logic in Python.
 
 ## Architecture
 
 ```
 User Query + URL
-       │
-       ▼
-┌──────────────────┐
-│ session_manager   │  Persistent Chrome via CDP · Raw data server
-│                   │  Shared Gemini inference utility
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ morphnet_         │  Branch/prune planning tree (AgentOccam)
-│ orchestrator      │  Routes subtasks to CU or MCP
-└───┬──────────┬───┘
-    │          │
-    ▼          ▼
-┌────────┐ ┌────────────┐
-│computer│ │mcp_manager  │  All protocols: REST, GraphQL, JSON-RPC, form, multipart
-│_use    │ │             │  Lifecycle: verified → trusted → degraded → discarded
-│ 10 acts│ │             │
-└───┬────┘ └──────┬─────┘
-    │              │
-    ▼              ▼
-┌──────────────────────┐
-│ reflector             │  Three-stage pipeline: deterministic → AXTree diff → LLM
-│                       │  Separate paths for CU actions vs MCP calls vs subtasks
-└───────────────────────┘
-    │
-    ▼
-┌──────────────────────┐
-│ trace.py              │  Every decision: reasoning, evidence, confidence → JSONL
-└───────────────────────┘
+       |
+       v
++--------------------+
+| session_manager    |  Persistent Chrome via CDP. Raw data server.
+|                    |  Shared Gemini inference utility.
++--------+-----------+
+         |
+         v
++--------------------+
+| morphnet_          |  Branch/prune planning tree (AgentOccam)
+| orchestrator       |  Routes subtasks to CU or executor
++---+----------+-----+
+    |          |
+    v          v
++--------+ +----------+
+|computer| | executor  |  Deterministic graph runner via CDP
+|_use    | | (0 LLM)   |  Topological sort, param chaining, JSONPath
+| 10 acts| +----------+
++---+----+
+    |
+    v (always-on)
++--------------------+
+| observer           |  CDP capture: HTTP traffic + stack traces,
+|                    |  CU actions + reasoning, DOM snapshots,
+|                    |  framework fingerprinting
++--------+-----------+
+         |
+         v (background, post-subtask)
++--------------------+
+| learner            |  12-step pipeline: traffic -> nodes -> edges ->
+|                    |  entry points -> graph -> verify -> name -> store
++--------------------+
+    |
+    v
++--------------------+
+| reflector          |  Three-stage: deterministic -> AXTree diff -> LLM
++--------------------+
+    |
+    v
++--------------------+
+| trace.py           |  Every decision: reasoning, evidence, confidence -> JSONL
++--------------------+
 ```
+
+### Three-Layer Tool Discovery Pipeline
+
+1. **Observer** (always-on during CU) -- Captures raw material without blocking CU execution or making decisions. HTTP traffic with initiator stack traces, CU actions with reasoning, DOM snapshots, framework fingerprinting (React/Redux/Vue/Angular/Next.js).
+
+2. **Learner** (background, post-subtask) -- Builds execution graphs from observations. 12-step pipeline: filter traffic, build nodes, classify endpoints (REST/GraphQL/JSON-RPC), trace edges from stack frames, map parameter roles (`user_intent`/`chained`/`captured_constant`/`session_derived`), identify entry points (5-strategy fallback), verify via CDP re-invocation, name via LLM. ONE LLM call total (naming).
+
+3. **Executor** (deterministic, zero LLM) -- Runs learned graphs via CDP. Topological sort of nodes, JSONPath extraction for parameter chaining, precondition checks, canary tests, completion detection.
+
+## Graph Model
+
+### Formal Definitions
+
+A **node** is a tuple `(endpoint_fingerprint, core_params, response_schema_fingerprint)`. Two nodes are equivalent iff all three fields match.
+
+A **edge** is a triple `(from_node_id, to_node_id, via_extract_path)`. Two edges are equivalent iff all three fields match.
+
+A **graph** G = (N, E) where N is a set of nodes and E is a set of directed edges.
+
+- **Equivalence**: `G1 = G2` iff `N1 = N2` and `E1 = E2`
+- **Subgraph**: `G1 < G2` iff `N1 ⊆ N2` and `E1 ⊆ E2` (strict subgraph excludes equality)
+- **Terminal set**: `T(G) = {n in N : response(n) precedes an observable state change}` -- URL navigation, DOM hash change, or AXTree count change >20%
+- **Identity**: `id(G) = sha256(sorted(node_fingerprints) + sorted(edge_tuples))` -- structural, not nominal
+
+**Endpoint fingerprinting** varies by protocol:
+- REST: `method + path_template + sorted(param_names)`
+- GraphQL: `operation_name + query_hash`
+- JSON-RPC: `method`
+
+**Lifecycle**: Graphs start unverified. Verification via CDP re-invocation at discovery (read-only graphs). Execution stats tracked (runs, successes). Degraded/discarded on repeated failure.
+
+### Graph Operations
+
+**Creation**: observation -> filter traffic -> build nodes -> build edges -> map parameter roles -> identify entry points -> verify (read-only) -> identify terminals -> build completion -> compute identity -> check registry -> name (1 LLM call) -> save.
+
+**Merge (union)**: Given G1 and G2 observed together in a single subtask where their nodes share some identity, produce `G3 = (N1 ∪ N2, E1 ∪ E2 ∪ E_cross)` where `E_cross` includes any newly observed edges between N1 and N2. G1 and G2 remain as parents of G3.
+
+**Example**: X = ({a,b,c}, {a->b, b->c}), Y = ({d,e,c}, {d->e, c->e}). Observed together, a new cross-edge c->e connects X and Y. Result: Z = ({a,b,c,d,e}, {a->b, b->c, c->e, d->e}). Z is a supergraph of both X and Y.
+
+**Subsumption**: When a new graph Z is produced, `parent_graph_ids` = all existing graphs G where `G < Z`.
+
+**Retrieval**: `find_candidates(site, subtask_description, page_url)` filters by precondition (URL pattern match), then ranks by cosine similarity of capability_statement embeddings (if available) or insertion order.
+
+### Significance Score (deferred)
+
+Currently returns 1.0 for all candidates. Future work: rank by `semantic_match * execution_success_rate * terminality_score * recency`.
+
+### Drift Detection (future work)
+
+Bundle hash (`sha256(sorted(script_content_hashes))`) captures the JS bundle identity at graph creation time. When `executor._check_preconditions` detects a bundle hash mismatch, it escalates to a canary test. If the canary fails, the graph is marked degraded. Full re-discovery (triggering the learner to rebuild the graph from fresh CU observations) is planned but not yet implemented.
+
+### Entry Point Identification (5-Strategy Fallback)
+
+When a graph node needs to be invoked, the learner identifies how to trigger the website's JS:
+
+1. **Reachable global** -- Function is directly accessible on `window.*`
+2. **Framework dispatch** -- React/Redux/Vue store dispatch or action creator
+3. **Extracted function IIFE** -- Extract the function body, wrap in IIFE, evaluate via CDP
+4. **DOM replay** -- Simulate the original DOM interaction that triggered the request
+5. **Give up** -- Mark node as non-executable (graph still stored for future attempts)
 
 ## Directory Structure
 
 ```
 morphnet/
-├── session_manager.py         # Browser session + raw data + Gemini utility
-├── morphnet_orchestrator.py   # Planning, routing, website profiling
-├── computer_use.py            # CU agent (10 actions per subtask)
-├── representation.py          # Page representation pipeline (CLEAN→COLLECT→STRUCTURE→FORMAT)
-├── mcp_manager.py             # MCP creation, execution, lifecycle
-├── reflector.py               # Three-stage verification pipeline
-├── trace.py                   # Decision trace recorder (deterministic)
-├── run_webarena_evals.py      # Eval harness (deterministic, no LLM calls)
-├── prompts/                   # All LLM prompts as .txt files
-└── sites/                     # Per-website persistent state
-    ├── noise_domains.txt
-    └── {site_name}/
-        ├── profile.json       # Website insights, auth patterns
-        ├── credentials.json   # Login credentials
-        └── tools.json         # MCP tools + lifecycle status
-
-results/                          # Trace output (auto-created)
-├── YYYY-MM-DD_HHMMSS/           # Single run
-│   └── trace.jsonl
-└── eval_{benchmark}_{datetime}/ # Eval batch
-    ├── task_{id}/
-    │   └── trace.jsonl
-    └── eval_summary.json
+  session_manager.py         # Browser session + raw data + Gemini utility + stealth
+  morphnet_orchestrator.py   # Planning, routing (CU or executor), website profiling
+  computer_use.py            # CU agent (10 actions per subtask, batch Plan-Then-Execute)
+  observer.py                # Always-on CDP capture (HTTP, actions, DOM, frameworks)
+  learner.py                 # Post-subtask graph builder (12-step pipeline)
+  executor.py                # Deterministic graph runner via CDP (zero LLM)
+  manifest.py                # Data models, storage, identity, retrieval
+  representation.py          # TOON notation pipeline (CLEAN->COLLECT->ENRICH->STRUCTURE->FORMAT)
+  reflector.py               # Three-stage verification pipeline
+  trace.py                   # Decision trace recorder (deterministic)
+  prompts/                   # LLM prompts (.txt files, not hardcoded)
+    cu_core.txt              # CU base system prompt (~600 tokens)
+    cu_action.txt            # CU action generation prompt
+    cu_plan.txt              # CU batch planning prompt
+    cu_context_*.txt         # Context-specific injections (form, search, listing, recovery)
+    orchestrator_plan.txt    # Orchestrator planning prompt
+    reflect_action.txt       # Per-action reflection prompt
+    reflect_subtask.txt      # Per-subtask reflection prompt
+    tool_naming.txt          # Graph naming LLM prompt
+    param_generation.txt     # Parameter extraction prompt
+  sites/                     # Per-website persistent state (auto-created from URL hostname)
+    {site_name}/
+      profile.json           # Website insights, navigation patterns
+      credentials.json       # Login credentials (optional, untracked)
+      graphs/                # Learned execution graphs
+        {graph_id}.json      # One graph per file (structural hash as ID)
+      captures/              # Raw subtask observations
+        {subtask_id}.json    # Complete observation record
+      bundle/                # JS bundle snapshots
+        {hash}/scripts/      # Captured script sources
+      tools.json             # Graph registry (name -> ID mapping)
+      embeddings.json        # Capability statement embeddings for retrieval
+experiments/
+  eval_140_tasks.json        # 7 sites x 20 tasks = 140 eval tasks
+  run_eval.sh                # Parallel eval runner (1 Chrome per site)
+  analyze_eval.py            # Result analysis: per-site metrics, graph stats
+  real_world_tasks.json      # Original 50-task subset
+  graph_formation_test.json  # Graph builder integration tests
+  test_graph_in_browser.py   # End-to-end graph execution test
+  test_perfect_graph_direct.py  # Direct graph execution test
+  plot_tool_graph.py         # Graph visualization
+results/                     # Auto-created by runs
+  {YYYY-MM-DD_HHMMSS}/      # Single run output
+    result.json              # Success, answer, executor stats
+    trace.jsonl              # Decision trace
+    steps/                   # Per-step representations + screenshots
+    planning_tree.mermaid    # Planning tree visualization
+  eval_{datetime}/           # Eval run output
+    {label}/                 # Per-task directory
+    eval_summary.json        # Aggregate metrics
 ```
-
----
-
-## Core Design Decision: Each Module Owns Its Representation
-
-**session_manager.py serves raw data.** It extracts DOM, AXTree, screenshots, cookies, tokens, and traffic — hands them unprocessed to consumer modules. Basic structural cleaning only (strip `<script>`, `<style>`, `<noscript>`; filter noise domains).
-
-**Each consumer module distills this raw data into the representation its LLM needs.** The raw toolkit includes: AXTree (semantic structure), DOM (parameter sources, form structure, hidden fields), screenshots (visual layout), Set-of-Marks annotation (element grounding for VLMs), cookies/storage (session state), meta tokens (CSRF/auth), and captured traffic (API patterns). No single module uses all of these — each selects and processes the subset relevant to its task, following AgentOccam (ICLR 2025) and Agent-E's principle of task-adaptive distillation. The raw data sources at each module's disposal include: AXTree (semantic roles, states, accessible names), DOM (structure, hidden fields, data attributes, form layout, parameter sources), screenshots (visual layout — annotated with SoM bounding boxes by CU when needed), cookies/storage (session state, auth tokens), meta tokens (CSRF, form keys with source annotations), and captured network traffic (request/response pairs with protocol classification). Each module selects and distills only the sources relevant to its task.
-
----
 
 ## Module Specifications
 
-### session_manager.py — Raw Data Server
+### session_manager.py -- Raw Data Server
 
 Owns the browser. Every other module operates through it.
 
-**Serves (on-demand):** Each consumer calls only what it needs — no bundled extraction. Available: `get_raw_accessibility_tree()`, `get_dom_tree()` (fast regex-cleaned `page.content()`), `take_screenshot()`, `get_interactive_elements()` (with hierarchical filtering at 200+ elements), `get_cookies()`, `get_storage()`, meta tokens with source annotations, captured network traffic with protocol classification.
+**Serves (on-demand):** `get_raw_accessibility_tree()`, `get_dom_tree()`, `take_screenshot()`, `get_interactive_elements()`, `get_cookies()`, `get_storage()`, meta tokens, captured network traffic. Each consumer calls only what it needs.
 
-**Does not do:** LLM-oriented formatting, SoM annotation, DOM distillation, task interpretation, MCP logic.
+**CDP access for observer/executor:** `get_cdp_session()` returns a fresh CDP session. `evaluate_js(expression, await_promise)` is a thin `Runtime.evaluate` wrapper. `wait_for_dom_stable(timeout_ms)` uses MutationObserver-based stability detection.
 
-**Shared Gemini utility:** `call_gemini()` at module level handles API mechanics. Each consumer provides its own model, schema, prompt, and config. Defaults: `max_output_tokens=8192`, `ThinkingConfig(thinking_budget=4096)`. Retries once with doubled thinking budget on truncated JSON.
+**Does not do:** LLM-oriented formatting, task interpretation, graph logic.
 
-**Action execution:** Receives structured action dicts from CU agent, resolves element IDs to Playwright selectors, executes, returns structured results. Never decides what action to take.
+**Shared Gemini utility:** `call_gemini()` at module level. Each consumer provides its own model, schema, prompt, config. Defaults: `max_output_tokens=8192`, `ThinkingConfig(thinking_budget=4096)`.
 
-**Chrome via CDP** for real browser fingerprint. **curl_cffi** for TLS-matched MCP HTTP replay.
+**Chrome via CDP** for real browser fingerprint. **Bot detection hardening:** rebrowser-playwright, playwright-stealth v2, custom stealth scripts, behavioral humanization, TLS fingerprint alignment.
 
----
+### morphnet_orchestrator.py -- Task Planner + Router
 
-### morphnet_orchestrator.py — Task Planner
+Receives a natural language task + start URL. Decomposes into subtasks. Routes each to CU or executor.
 
-Receives a natural language task + start URL. Decomposes into subtasks. Routes each to CU or MCP.
+**Routing:** Executor-first when a matching graph exists (via `find_candidates()`). Extracts `user_intent` parameters via LLM. Falls back to CU when executor fails or no graph matches. Observer runs during all CU subtasks; learner fires as a background `asyncio.Task` after successful CU execution.
 
-**Representation:** Text-only AXTree distillation (strip element-level details, keep headings/landmarks/text/structure) + lightweight DOM summary (page landmarks, form structures, metadata). No screenshots — no actionable planning information beyond what text provides.
+**Planning:** AgentOccam's branch/prune tree. Each completed/pruned branch is condensed into a `BranchSummary` (what attempted, key actions, outcome, reasoning, insights, data). Loop detection via word overlap on pruned branches.
 
-**Planning model:** AgentOccam's branch/prune tree. Each node is a sub-plan. The orchestrator can `branch` (try new approach), `prune` (abandon failed approach), or `continue`. When a branch completes or is pruned, its observations are condensed into a **structured summary** — not a one-liner but a pointed digest capturing: what was attempted, key actions taken, outcome, reasoning for the outcome, and any insights gained. Only the current active branch retains full context. This manages context growth while preserving enough history for informed planning.
+**Representation:** Text-only AXTree distillation + lightweight DOM summary. No screenshots.
 
-**MCP lifecycle management:** Tracks tool status. Routes to trusted/verified MCPs when available. Falls back to CU when MCPs fail. Does not interpret MCP HTTP responses — reads the reflector's structured verdict. If reflector said success but the page state contradicts it on the next planning step, the orchestrator notices naturally (it loads fresh page state for planning anyway) and degrades the MCP.
+**Model:** `gemini-3.1-pro-preview`, thinking enabled, ~0.4 temperature.
 
-**Model:** `gemini-3.1-pro-preview`, thinking enabled, ~0.4 temperature, 8192 max tokens.
+### observer.py -- Always-On CDP Capture
 
----
+Attaches during CU subtasks. Captures without blocking or making decisions.
 
-### representation.py — Page Representation Pipeline
+**Captures:** HTTP traffic via `Network.requestWillBeSent` / `responseReceived` / `loadingFinished` (with full initiator stack traces), CU actions with reasoning (from `action_dict["reasoning"]` -- a required field in CU's Gemini schema), periodic DOM snapshots (5s timer), framework fingerprinting via `page.evaluate` probes.
 
-Owns ALL AXTree-to-text transformations. Both CU agent and orchestrator import from it.
+**Noise filtering:** Analytics/telemetry domains filtered (google-analytics, segment, sentry, hotjar, etc.). Only substantive API traffic retained.
 
-**Pipeline:** CLEAN (whitespace normalization, CSS-name filtering, text compression) → COLLECT (element matching, functional role inference) → STRUCTURE (depth-keyed context tracking, text dedup, footer exclusion) → FORMAT (section-based output with inline elements).
+**Output:** `SubtaskObservation` dataclass containing all captured data + `bundle_hash` (sha256 of sorted script content hashes for drift detection).
 
-**Context tracking:** A `_ContextStack` records the most recent significant text at each AXTree depth during the walk. When a generic button like "ADD" is encountered, the stack provides the nearest product name — regardless of whether it's a heading, StaticText, or paragraph. This solves the "which ADD button?" disambiguation problem on food delivery menus, e-commerce product lists, etc.
+### learner.py -- Post-Subtask Graph Builder
 
-**Four views:** `build_cu_representation()` (section-based, inline elements with context, footer excluded), `build_orchestrator_representation()` (text-only, full page, no element IDs), `build_reflector_representation()` (content-focused, card-aware, chrome-compressed — for subtask outcome verification), and `build_mcp_parameter_context()` (recipe-based extraction from browser state for MCP parameter generation).
+Runs in background after successful CU subtasks. ONE LLM call (naming).
 
----
+**12-step pipeline:**
+1. Filter relevant HTTP traffic (remove noise, static assets)
+2. Build graph nodes from filtered requests
+3. Classify endpoint protocol (REST/GraphQL/JSON-RPC/form)
+4. Compute endpoint fingerprints
+5. Trace edges from initiator stack frames (shared script -> data flow)
+6. Map parameter roles from CU action bindings
+7. Identify entry points (5-strategy fallback)
+8. Build completion spec (terminal nodes, success indicators)
+9. Compute graph identity (structural hash)
+10. Check registry for duplicates/subsumption
+11. Verify graph via CDP re-invocation (navigate to start_url first)
+12. Name via LLM (domain-general prompt, one call)
 
-### computer_use.py — Browser Action Agent
+**Naming LLM (step 12):** The learner's single LLM call is site-agnostic and domain-general. It receives: site name, subtask description, CU reasoning for each node, existing graph names/capability statements, parent graph info, and the new graph's endpoint fingerprints + extract paths. It produces: `name` (short, capability-focused), `description` (2-3 sentences), `capability_statement` (one sentence for semantic retrieval), and `reason_for_version` (what this extends over parents). The prompt uses abstract examples across domains (search, filter, detail, auth, mutation, composite) -- no hardcoded site-specific vocabulary.
 
-Receives a subtask description. Has 10 actions to complete it.
+**Deduplication:** If new graph's ID matches existing, skip. If new graph is a supergraph of existing, replace. If subset, skip.
 
-**Representation:** Uses `representation.py` for AXTree-to-text transformation. Interactive elements appear inline with their context text. Generic buttons get nearby-text disambiguation. Footer excluded. Pruning rules: merge redundant StaticText, convert tables/lists to Markdown, strip rendering artifacts, collapse repetitive siblings, exclude CSS-class names.
+### executor.py -- Deterministic Graph Runner
 
-**Viewport-aware:** Loads visible + one viewport below. Scroll remains a valid action for revealing more content. Unlike AgentOccam's "load full page" approach, this handles real-world infinite-scroll sites.
+Zero LLM calls. Invokes the website's own JS via CDP.
 
-**Screenshots:** SoM-annotated screenshot only on first action and after failed actions. AXTree with element IDs is the primary representation.
+**Pipeline:**
+1. Precondition check (URL pattern, required globals, bundle hash)
+2. Canary test (simplest node with example values)
+3. Resolve `user_intent` parameters from orchestrator
+4. Topological execution (CDP `Runtime.evaluate` each node)
+5. JSONPath extraction for parameter chaining between nodes
+6. Completion (navigate + success indicator detection)
+7. Stats update
 
-**Action space:** `click`, `type`, `select`, `scroll`, `press_key`, `navigate`, `hover`, `go_back`, `wait`, `note`, `stop`. The `note` action records observations without browser interaction (critical for multi-step retrieval). The `stop` action signals subtask completion.
+**Returns:** `success`, `not_applicable`, `degraded`, `execution_error`, `completion_timeout`
 
-**History:** Flat within subtask (no branching for 10 actions). Last 2-3 actions: full detail. Earlier: one-line summaries. Current state dominates context.
+### manifest.py -- Data Models + Storage + Identity
 
-**Extraction pattern (n+1):** Initial extraction once before the action loop. After each action, the after-state becomes the next iteration's before-state. For n actions, this requires n+1 extractions instead of the naive 2n.
+Foundation module. All data models used by observer, learner, and executor.
 
-**On success:** Signals mcp_manager to analyze captured traffic for MCP discovery.
+**Key types:** `CUAction`, `HTTPRequest`, `ScriptSource`, `DOMSnapshot`, `SubtaskObservation`, `ParameterSpec`, `NodeInvocation`, `GraphNode`, `GraphEdge`, `Graph`, `ExecutionResult`
 
-**Model:** `gemini-3-flash-preview`, thinking enabled, 8192 max tokens.
+**Storage:** `save_graph()`, `load_graph()`, `list_graphs()`, `find_candidates()`, `save_observation()`, `save_script()`. All under `sites/{site_name}/`.
 
----
+**Identity:** `compute_graph_id()` = `sha256(sorted(node_fingerprints) + sorted(edge_tuples))`. `is_subset()` and `graphs_equivalent()` for deduplication.
 
-### mcp_manager.py — API Tool Manager
+### representation.py -- Page Representation Pipeline
 
-Creates, validates, executes, and lifecycle-manages MCP tools. Built after the three core modules.
+Owns ALL AXTree-to-text transformations. Four views:
 
-**Representation:** Raw DOM focused on parameter sources (hidden fields, data attributes, form structure), meta tokens with source annotations, cookies, storage dumps, and captured traffic. Does not receive AXTree or screenshots.
+- `build_cu_representation()` -- Section-based, inline elements with context, footer excluded
+- `build_orchestrator_representation()` -- Text-only, full page, no element IDs
+- `build_reflector_representation()` -- Content-focused, card-aware, chrome-compressed
+- `build_tool_param_context()` -- DOM-focused extraction for parameter generation
 
-**Protocol support:** REST, GraphQL (operationName-based identity, mutation detection), JSON-RPC (method-based identity), URL-encoded form, multipart form.
+**TOON notation:** Compact abbreviations (~32% char savings, ~48% token savings). `[5] btn"ADD" |near:Margherita Pizza` instead of `[5] button "ADD" -- near: Margherita Pizza`.
 
-**Evolving parameter schema:** Each MCP tool maintains an inferred schema that grows with every observation. Per parameter, the schema tracks: data type, required vs optional (presence frequency across observations), example values, value ranges for numerics, format hints (UUID, ISO date, JWT, etc.), and — critically — **source hints** noting where this parameter value was found in the browser state (which DOM element, which cookie, which prior API response field). These source hints mean that when the MCP is used in an entirely new scenario, the parameter generator knows exactly where to look first. Early observations produce a draft schema; after 10+ observations it stabilizes with confident required/optional classification. No enum detection — enums catastrophically constrain user-intent fields, session tokens, and chained outputs. Example values (`x-examples`) guide the LLM without constraining it.
+**Context tracking:** Depth-keyed `_ContextStack` during AXTree walk disambiguates generic buttons by nearest significant text.
 
-**Extraction recipe:** Each tool has a per-parameter `extraction_recipe` — a list of `ExtractionStep` dicts that tell representation.py HOW to extract each parameter at execution time. Steps are typed (cookie, dom_field, dom_list, storage, meta_tag, url_component, prior_api_response, task_description) and classified (user_intent, ephemeral, chained, page_context, static). Built automatically from traced parameter sources at discovery time. The recipe executor in representation.py (`build_mcp_parameter_context`) runs each step deterministically against the browser state to produce structured context for the parameter generation LLM.
+### reflector.py -- Three-Stage Verification
 
-**Response chaining:** MCP response bodies are cached by `endpoint_identity`. Tool B's extraction recipe can reference Tool A's response via `prior_api_response` steps — works regardless of whether Tool A ran via MCP or CU (checks cache first, then browser captured traffic). This enables multi-step workflows like "search for location → use place_id to set delivery address."
+**Stage 1 (deterministic, every action, zero LLM):** Element value before/after, URL change, HTTP status, ARIA alert/status/dialog nodes, element count diff. Most actions resolve here.
 
-**Response template:** Each tool learns a structural response template from successful responses. Tracks `always_present_paths` and `always_non_null_paths` (intersection across observations). The reflector uses this for deterministic structural checks — if a path that was always present is suddenly missing, or always-non-null data becomes empty, it's flagged as a failure without needing an LLM.
+**Stage 2 (AXTree diff, ambiguous cases):** Flatten before/after AXTrees, compare node signatures. Submit + no changes + no alerts = silent failure (flagged).
 
-**A/B learning:** When an MCP tool fails and CU fallback succeeds, `learn_from_cu_fallback` compares the failed parameters against the correct CU traffic. For each differing parameter: traces the correct value in the browser state registry, rebuilds the extraction step, and replaces the old recipe step. Also merges the correct request/response into the schema and template.
+**Stage 3 (LLM, ~2-3 per subtask):** Receives action, deterministic signals, AXTree diff. Must cite specific evidence. Binary verdict.
 
-**Validation at discovery:** Immediate replay via curl_cffi + independent param generation test + reflector confirms state change. Tool only marked "validated" if all three pass.
+### trace.py -- Decision Trace
 
-**MCP Lifecycle:**
-
-| State | Entry Condition | Orchestrator Behavior |
-|---|---|---|
-| **Verified** | Passes validation at discovery | Available for routing |
-| **Trusted** | 3 consecutive successes from verified | Preferred over CU |
-| **Degraded** | Trusted tool fails once | Available with warning; 2 more consecutive failures → discarded |
-| **Discarded** | 3 consecutive failures from any state | Removed from routing. Failure reason logged for future reference |
-
----
-
-### reflector.py — Three-Stage Verification
-
-Determines whether actions and subtasks succeeded. Most actions verified without LLM calls.
-
-**Stage 1 — Deterministic Signals (every action, zero LLM cost):**
-Element value before/after, URL change, HTTP status codes from captured traffic, ARIA alert/status/dialog nodes in AXTree (W3C standard — framework-agnostic), `aria-invalid` field changes, element count diff.
-
-Most actions resolve here: type (value match), select (value match), scroll (new elements), navigate (URL change), click-with-navigation (URL change + no alerts).
-
-**Stage 2 — AXTree Diff (ambiguous cases only):**
-Flatten before/after AXTrees, compare node signatures, report additions/removals/changes. Prioritize ARIA signal nodes and structural changes. Inherently excludes cosmetic noise (CSS, animations, decorations aren't in AXTree).
-
-Key detection: submit action + no meaningful changes + no ARIA alerts + no HTTP errors = silent failure (flagged as suspicious, never auto-classified as success).
-
-**Stage 3 — LLM Evaluation (only when Stages 1-2 can't resolve, ~2-3 per subtask):**
-Receives: the action attempted, deterministic signals as facts, compact AXTree diff, ARIA alert/status text. Must cite specific evidence for its verdict — cannot claim success without pointing to concrete signals. Binary verdict (not rubric-based — research shows 87% human agreement vs ambiguous rubric scores).
-
-**MCP verification — deterministic-only:**
-- **Reflector (immediate):** Deterministic HTTP status check → response structure check against learned template (always_present_paths, always_non_null_paths) → page state AXTree diff for mutations. No LLM calls. Returns structured verdict to orchestrator.
-- **Orchestrator (natural):** Loads fresh page state on next planning step. If reflector said success but page contradicts, orchestrator notices and degrades the MCP. Semantic verification is the orchestrator's job, not the reflector's.
-
-**Subtask reflection (deep, after entire subtask):**
-Full journey evaluation: condensed action log with per-action verdicts, current page AXTree, focused DOM excerpt around expected change region, notes from CU agent. Specifically checks for "claimed but not executed" (agent said stop/success but never performed the key submit/click action). Uses Gemini Pro Preview with high thinking budget.
-
----
-
-### trace.py — Decision Trace
-
-Already built. Deterministic recorder. Zero LLM calls.
-
-Every Gemini call wraps in `trace.span()`. Every schema includes `reasoning`, `confidence`, `evidence_sources` — these flow directly from model output to trace entries. Every browser action, traffic capture, and reflection assessment is logged.
-
-Output: `./results/{datetime}/trace.jsonl`. Eval harness controls path for benchmark runs.
-
----
-
-### run_webarena_evals.py — Eval Harness
-
-Deterministic scoring. Zero LLM calls. Wraps MorphNet for WebArena Verified benchmarks.
-
----
+Deterministic recorder. Zero LLM calls. Every Gemini call wraps in `trace.span()`. Schema fields (`reasoning`, `confidence`, `evidence_sources`) flow directly from model output to trace entries.
 
 ## Model Assignments
 
-| Role | Model | Thinking | Max Tokens |
-|---|---|---|---|
-| Orchestrator planning | `gemini-3.1-pro-preview` | Enabled, budget 4096 | 8192 |
-| CU action generation | `gemini-3-flash-preview` | Enabled, budget 4096 | 8192 |
-| Per-action reflection (Stage 3) | `gemini-3-flash-preview` | Enabled, budget 4096 | 8192 |
-| Per-subtask reflection | `gemini-3.1-pro-preview` | Enabled, budget 4096 | 8192 |
-| MCP parameter generation | `gemini-3-flash-preview` | Enabled, budget 4096 | 8192 |
-| MCP response-vs-intent check | `gemini-3-flash-preview` | Enabled, budget 4096 | 8192 |
+| Role | Model | Thinking |
+|---|---|---|
+| Orchestrator planning | `gemini-3.1-pro-preview` | Enabled, budget 4096 |
+| Subtask reflection | `gemini-3.1-pro-preview` | Enabled, budget 4096 |
+| CU actions | `gemini-3-flash-preview` | Enabled, budget 4096 |
+| Action reflection (Stage 3) | `gemini-3-flash-preview` | Enabled, budget 4096 |
+| Intent extraction (executor) | `gemini-3-flash-preview` | Disabled |
+| Graph naming (learner) | `gemini-3-flash-preview` | Enabled, budget 4096 |
 
-**Flash Lite is not used anywhere.** Every call sits on a critical path.
+Flash Lite is not used. Every call is on a critical path.
 
----
+## Design Principles
 
-## Development Principles
+1. **Schemas over string matching.** Every Gemini call uses structured output. Every schema includes `reasoning`, `confidence`, `evidence_sources`. Never regex on model outputs.
+2. **Each module owns its representation.** session_manager serves raw data. Each consumer distills via representation.py.
+3. **Justify every field.** What consumes it? What breaks if removed?
+4. **No unnecessary files.** Don't split into utils/helpers unless genuinely reused.
+5. **Trace through schema fields.** trace.py is deterministic -- Gemini schema fields flow directly to trace entries.
+6. **Prompts in ./morphnet/prompts/.** Not hardcoded in Python.
+7. **On-demand extraction.** session_manager never bundles all extractions -- each consumer calls what it needs.
+8. **Observer never blocks CU.** All observer calls wrapped in try/except (non-fatal).
+9. **Learner never blocks orchestrator.** Runs as background asyncio.Task, awaited only at task end.
+10. **Executor is deterministic.** Zero LLM calls. Invokes the website's own JS. Fails fast on precondition mismatch.
 
-1. **Gemini structured output schemas are typed function contracts.** Maximally descriptive field names, types, enums, descriptions. Every schema includes `reasoning`, `confidence`, `evidence_sources`. These flow directly to trace entries.
+## Commands
 
-2. **Never string match on unstructured natural language.** Parsing structured material (HTML, JSON) is fine. Never regex/substring on model outputs.
+```bash
+# Run a single task
+uv run python -m morphnet.session_manager --url "https://example.com" --task "Find X" --headless true --port 9222
 
-3. **Centralized representation pipeline in `representation.py`.** session_manager serves raw data. `representation.py` owns all AXTree-to-text transformations — CU gets section-based inline elements with context tracking, orchestrator gets text-only distillation. Additional views: Set-of-Marks annotation (CU on failure), task-adaptive DOM distillation (MCP), adaptive evidence selection (reflector).
+# Run with site credentials and custom subtask limit
+uv run python -m morphnet.session_manager --url "https://swiggy.com" --task "Order food" --site swiggy_com --max-subtasks 12
 
-4. **Justify every field in every data structure.** What consumes it? What breaks if removed?
+# Run full 140-task eval (7 sites x 20 tasks, parallel)
+./experiments/run_eval.sh
 
-5. **No unnecessary files.** Consolidated. Whatever is used in a module, keep it closeby.
+# Run eval for specific sites
+./experiments/run_eval.sh --site reddit --site youtube --per-site 5
 
-6. **Comments explain why, not what.** Related logic stays together.
+# Resume a failed eval run
+./experiments/run_eval.sh --resume results/eval_20260416_143000
 
-7. **Prompts live in ./prompts/ as .txt files.** Not hardcoded.
+# Analyze eval results
+uv run python experiments/analyze_eval.py results/eval_20260416_143000/ --verbose
 
-8. **Every decision is traced.** Gemini calls wrap in `trace.span()`. Schema fields → JSONL.
+# Install dependencies
+uv sync
+```
 
-9. **On-demand extraction, not bundled.** session_manager never bundles all extractions into one call. Each consumer calls exactly what it needs. This prevents 26+ second bottlenecks on complex pages.
-
-10. **Auto site profiling.** `site_name` is derived from the URL hostname automatically. Site directories and configs are created on first access, not manually.
-
----
-
-## Architectural Rules
-
-1. **session_manager owns the browser.** No other module creates contexts, pages, or HTTP clients.
-2. **session_manager serves raw data.** Each consumer builds its own view.
-3. **Chrome via CDP + curl_cffi.** Real fingerprint for browsing and API replay.
-4. **Orchestrator is benchmark-agnostic.** Eval logic in run_webarena_evals.py only.
-5. **CU is stateless per subtask.** Orchestrator manages memory via planning tree.
-6. **MCP lifecycle: verified → trusted → degraded → discarded.** Orchestrator checks status before routing.
-7. **Reflector uses three stages.** Deterministic first, AXTree diff second, LLM third. Most actions need no LLM.
-8. **All LLM outputs use structured schemas.** No free-form parsing.
-9. **Website state in ./sites/.** Tools, profiles, credentials per-website.
-10. **AgentOccam principles throughout.** Align to LLM pretraining. Simplify action/observation spaces. Branch/prune for context.
-11. **Python 3.12.** Modern features throughout.
-12. **Hierarchical element filtering.** When pages have >200 interactive elements, structural/navigational elements are preserved and the rest are sampled with section summaries for collapsed groups.
-13. **Every decision traced via schema fields.** Gemini schemas include reasoning + evidence_sources + confidence. `./results/` stores all trace output, organized by datetime.
+Always use `uv run python` -- never bare `python`.

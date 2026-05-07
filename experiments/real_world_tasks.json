@@ -1,0 +1,352 @@
+[
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_01_movies_languages",
+    "task": "Go to BookMyShow, set your city to Mumbai, navigate to the movies section, and find how many languages the movie 'Dhurandhar The Revenge' is available in. List all the languages.",
+    "verification_hint": "List of languages (e.g. Hindi, Telugu, Tamil, Malayalam, Kannada)"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_02_movie_formats",
+    "task": "Go to BookMyShow for Pune, search for the movie 'Project Hail Mary', and find out what formats (e.g., 2D, IMAX, 4DX, 3D) it is currently showing in. Also note the lead actor's name from the movie details page.",
+    "verification_hint": "List of formats (IMAX, 2D, etc.) and lead actor name"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_03_comedy_events",
+    "task": "On BookMyShow, set the city to Mumbai, go to the Events section, and find comedy shows happening this month. Identify at least two comedy shows and the venues they are being held at.",
+    "verification_hint": "2+ comedy show names with venue names"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_04_play_details",
+    "task": "Go to BookMyShow, set city to Mumbai, and find a play currently showing. Report its name, the theatre/venue, the dates it is showing, and at least two cast members.",
+    "verification_hint": "Play name, venue, dates, cast members"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_05_kannada_movies",
+    "task": "Go to BookMyShow for Bangalore (Bengaluru), navigate to the movies section, and filter movies by the language 'Kannada'. Count how many Kannada movies are currently showing and name at least three of them.",
+    "verification_hint": "Count of Kannada movies and at least 3 movie names"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_06_sports_events",
+    "task": "On BookMyShow, set the city to Mumbai, search for cricket or IPL match tickets. Find what matches are available for booking, the venue name, and dates.",
+    "verification_hint": "Match names, venue (e.g. Wankhede Stadium), dates"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_07_movie_theatres",
+    "task": "Go to BookMyShow, set the city to Pune, find a currently showing movie, and check which theatres in Pune are showing it. List at least three theatre names and check if IMAX screenings are available.",
+    "verification_hint": "3+ theatre names and IMAX availability (yes/no)"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_08_movie_cross_city",
+    "task": "On BookMyShow, pick a popular currently-showing movie and compare it across two cities - Mumbai and Hyderabad. For each city, find out what languages it is available in and how many theatres are showing it.",
+    "verification_hint": "Movie name, languages per city, theatre count per city"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_09_event_categories",
+    "task": "Go to BookMyShow for Delhi-NCR, navigate to the Events section, and find all event categories available (e.g., Comedy Shows, Music, Workshops, Kids, Theatre). List the top-level event categories shown on the events exploration page.",
+    "verification_hint": "List of event categories (Comedy, Music, etc.)"
+  },
+  {
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "label": "bms_10_movie_details",
+    "task": "On BookMyShow, set the city to Mumbai, find a currently showing movie, click on it to see the movie details page, and extract: the genre(s), the duration, the release date, and the user rating. Then check how many theatres in Mumbai are showing it in IMAX format.",
+    "verification_hint": "Genre, duration, release date, rating, IMAX theatre count"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_01_technic_expensive",
+    "task": "Go to lego.com/en-in, navigate to the Technic theme page, sort the sets by price from high to low, and report the name, price (in INR), and piece count of the most expensive LEGO Technic set currently available.",
+    "verification_hint": "Product name, price in INR, piece count (expect 2000+ pieces)"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_02_starwars_adult",
+    "task": "Go to lego.com/en-in, navigate to the Star Wars theme page, filter the sets to show only those suitable for ages 18+, then find and report the total number of adult Star Wars sets available, and provide the name, price, and piece count of the set with the highest piece count.",
+    "verification_hint": "Count of 18+ Star Wars sets, top set name/price/piece count"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_03_bestsellers",
+    "task": "Go to lego.com/en-in, navigate to the Bestsellers page, identify the top 3 bestselling LEGO sets, and for each report the product name, theme, price in INR, and recommended age range.",
+    "verification_hint": "3 product entries with name, theme, price, age range"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_04_ferrari_search",
+    "task": "Go to lego.com/en-in, use the search bar to search for 'Ferrari', then from the search results navigate to the most expensive Ferrari set's product detail page and report its full name, price in INR, piece count, recommended age, and assembled dimensions.",
+    "verification_hint": "Product name with Ferrari, price, piece count, age, dimensions"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_05_new_city",
+    "task": "Go to lego.com/en-in, navigate to the 'New Sets and Products' category, filter by the City theme, and report the total number of new LEGO City sets. Then pick the cheapest new City set and report its name, price, piece count, and age range.",
+    "verification_hint": "Count of new City sets, cheapest set details"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_06_age_group",
+    "task": "Go to lego.com/en-in, navigate to the 'Shop by Age' section, select the '5-7 years' age group, sort by price low to high, and report the 3 cheapest sets available for that age group — including each set's name, theme, price in INR, and piece count.",
+    "verification_hint": "3 entries with name, theme, price (low), piece count"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_07_creator_3in1",
+    "task": "Go to lego.com/en-in, navigate to the Creator 3-in-1 theme page, and report the total number of Creator 3-in-1 sets available. Then find the set with the highest piece count and report its name, price, piece count, and the three different models it can be built into.",
+    "verification_hint": "Count, top set name/price/pieces, 3 build options"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_08_speed_champions",
+    "task": "Go to lego.com/en-in, navigate to the Speed Champions theme page, find all Speed Champions sets priced under 2500 INR, and report how many there are. For each, list the product name, the real-world car brand it represents, and the exact price.",
+    "verification_hint": "Count of sets under 2500 INR, list with name/brand/price"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_09_icons_detail",
+    "task": "Go to lego.com/en-in, navigate to the LEGO Icons theme page, find a modular building or landmark set, click into its product detail page, and report the product name, price in INR, piece count, recommended age, and number of minifigures included.",
+    "verification_hint": "Product name, price, pieces (1000+), age, minifigure count"
+  },
+  {
+    "site": "lego",
+    "url": "https://www.lego.com/en-in",
+    "label": "lego_10_sales_deals",
+    "task": "Go to lego.com/en-in, navigate to the 'Sales and Deals' category page. Report how many sets are currently on sale. Then find the set with the largest discount percentage and report its name, original price, sale price, and the discount percentage.",
+    "verification_hint": "Count of sale items, top discount set details"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_01_biryani_search",
+    "task": "Go to swiggy.com, set your delivery location to Koramangala, Bangalore. Then search for 'Biryani' and find the highest-rated restaurant serving biryani. Report the restaurant name, its rating, and the estimated delivery time.",
+    "verification_hint": "Restaurant name, numeric rating, delivery time in minutes"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_02_pureveg_delhi",
+    "task": "Go to swiggy.com, set your location to Connaught Place, Delhi. Browse the list of restaurants and find one that offers 'Pure Veg' food with a rating of 4.0 or above. Open its menu and report the name of the restaurant, its rating, and the price of the cheapest item on the menu.",
+    "verification_hint": "Restaurant name, rating (4.0+), cheapest item price in rupees"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_03_offers_bangalore",
+    "task": "Go to swiggy.com, set your location to Indiranagar, Bangalore. Navigate to the offers/deals section or look for restaurants with active offers. Find two different restaurants that have discount offers currently running. Report each restaurant's name and the specific offer displayed.",
+    "verification_hint": "Two restaurant names with discount descriptions"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_04_pizza_compare",
+    "task": "Go to swiggy.com, set your location to Andheri West, Mumbai. Search for 'Pizza'. From the results, pick three different restaurants that serve pizza. For each, note the restaurant name, its rating, and the delivery time estimate. Report which of the three has the shortest delivery time.",
+    "verification_hint": "3 restaurant names with ratings and delivery times, shortest identified"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_05_instamart_vegs",
+    "task": "Go to swiggy.com and navigate to the Instamart section. Set your location to HSR Layout, Bangalore. Browse the 'Fruits & Vegetables' category and find the price of 1 kg of onions and 1 kg of tomatoes. Report both prices.",
+    "verification_hint": "Two prices in rupees for onions and tomatoes (1 kg each)"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_06_chinese_menu",
+    "task": "Go to swiggy.com, set your location to Bandra, Mumbai. Search for 'Chinese' cuisine. Open the menu of the highest-rated Chinese restaurant in the results. Find a 'Manchurian' dish on the menu and report the restaurant name, the exact dish name, and its price.",
+    "verification_hint": "Restaurant name, Manchurian dish name, price in rupees"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_07_free_delivery",
+    "task": "Go to swiggy.com, set your location to Whitefield, Bangalore. Browse the restaurant listings and identify two restaurants that offer free delivery. For each, report the restaurant name, cuisine type, and rating.",
+    "verification_hint": "2 restaurant names with cuisine type and numeric rating"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_08_dineout",
+    "task": "Go to swiggy.com and navigate to the Dineout section. Set the city to Bangalore and the area to Koramangala. Filter restaurants by 'Rating 4+'. Find a restaurant that serves Continental or Italian cuisine. Report the restaurant name, its rating, average cost for two, and the cuisines it serves.",
+    "verification_hint": "Restaurant name, rating (4.0+), cost for two, cuisine list"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_09_butter_chicken",
+    "task": "Go to swiggy.com, set your location to Saket, Delhi. Search for 'Butter Chicken'. From the search results, open two different restaurants that serve Butter Chicken. Compare the price of Butter Chicken across both restaurants. Report each restaurant's name, their Butter Chicken price, rating, and which one is cheaper.",
+    "verification_hint": "2 restaurant names with Butter Chicken prices and ratings, cheaper one identified"
+  },
+  {
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "label": "swiggy_10_instamart_milk",
+    "task": "Go to swiggy.com and navigate to the Instamart section. Set your location to Powai, Mumbai. Search for 'milk' in Instamart. Find the price of Amul Toned Milk (1 litre) and any one alternative brand of toned milk (1 litre). Report both brand names, their prices, and which one is cheaper.",
+    "verification_hint": "Two milk brand names with prices, cheaper one identified"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_01_delhi_mumbai",
+    "task": "Go to ConfirmTkt and find how many trains run between New Delhi and Mumbai. Then identify the fastest train on this route and report its name and approximate journey duration.",
+    "verification_hint": "Total train count, fastest train name and duration"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_02_rajdhani_schedule",
+    "task": "On ConfirmTkt, look up the train schedule for train number 12301 (Howrah-New Delhi Rajdhani Express). Report the departure station and time, the arrival station and time, total journey duration, and the number of stops on its route.",
+    "verification_hint": "Departure/arrival stations and times, journey duration, stop count"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_03_mumbai_pune",
+    "task": "Search ConfirmTkt for trains from Mumbai to Pune. Report the total number of trains available, the name of the fastest train and how long it takes, and the lowest ticket price available.",
+    "verification_hint": "Train count, fastest train name/duration, lowest fare"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_04_rajdhani_stops",
+    "task": "On ConfirmTkt, look up the schedule for the Mumbai Rajdhani Express (train 12951). List all the intermediate stations it stops at between Mumbai Central and New Delhi, and report the total distance covered.",
+    "verification_hint": "List of intermediate stations, total distance in km"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_05_bangalore_chennai",
+    "task": "Go to ConfirmTkt and find trains from Bengaluru to Chennai. Report the total number of trains, the name of the fastest train and its duration, and what time the first and last trains of the day depart.",
+    "verification_hint": "Train count, fastest train name/duration, first/last departure times"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_06_shatabdi_schedule",
+    "task": "On ConfirmTkt, look up the schedule for the New Delhi-Bhopal Shatabdi Express (train 12002). Report departure and arrival times, the total journey duration, and the station where the train has the longest halt and how long that halt is.",
+    "verification_hint": "Departure/arrival times, duration, longest halt station and duration"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_07_delhi_jaipur",
+    "task": "Search ConfirmTkt for trains from Delhi to Jaipur. Report the total number of trains, the name of the fastest train and how long it takes, and the cheapest and most expensive fare on this route.",
+    "verification_hint": "Train count, fastest train, fare range (cheapest to most expensive)"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_08_shatabdi_mumbai_ahm",
+    "task": "On ConfirmTkt, look up the schedule for the Mumbai-Ahmedabad Shatabdi Express (train 12009). Report departure and arrival times, which days of the week it runs, the total number of stations on the route, and the total distance.",
+    "verification_hint": "Times, running days, station count, distance"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_09_mumbai_goa",
+    "task": "Go to ConfirmTkt and find trains from Mumbai to Goa. Report the total number of trains on this route, the name of the fastest train and its journey time, and the lowest ticket fare.",
+    "verification_hint": "Train count, fastest train name/duration, lowest fare"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "ctkt_10_rajdhani_compare",
+    "task": "On ConfirmTkt, compare the Howrah-New Delhi Rajdhani (train 12301) and the Mumbai-New Delhi Rajdhani (train 12951) by looking up both their schedules. For each train, report the total journey time, number of stops, and distance covered. Then state which one is faster in terms of average speed.",
+    "verification_hint": "Journey time, stops, distance for both trains; which has higher avg speed"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_01_flights_del_bom",
+    "task": "Go to Cleartrip and search for one-way flights from Delhi (DEL) to Mumbai (BOM) for tomorrow for 1 adult in Economy class. Once the results load, apply the 'Non-stop' filter to show only direct flights. Report how many airlines offer non-stop flights, name all the airlines, and the price of the cheapest non-stop flight.",
+    "verification_hint": "Airline count, airline names, cheapest non-stop price"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_02_hotels_goa",
+    "task": "Go to Cleartrip and search for hotels in Goa for a check-in date of next Friday and check-out next Sunday (2 nights), 1 room, 2 adults. Filter by '5 Star' and 'Swimming Pool'. Report how many matching hotels, the cheapest one's name, price per night, and guest rating.",
+    "verification_hint": "Hotel count, cheapest hotel name/price/rating"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_03_roundtrip_blr_del",
+    "task": "Go to Cleartrip and search for round-trip flights from Bangalore (BLR) to Delhi (DEL), departing tomorrow and returning 3 days later, for 2 adults in Economy. Sort by 'Cheapest' and report the cheapest outbound flight details (airline, times, duration, price). Then sort by 'Fastest' and report those details. What is the price difference?",
+    "verification_hint": "Cheapest and fastest flight details with price difference"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_04_trains_del_jaipur",
+    "task": "Go to Cleartrip trains section and search for trains from New Delhi to Jaipur for tomorrow. Report how many trains are available, the name and number of the earliest departing train, what classes are available, and the fare for 3AC class.",
+    "verification_hint": "Train count, earliest train name/number, class list, 3AC fare"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_05_flights_bom_goi",
+    "task": "Go to Cleartrip and search for one-way flights from Mumbai (BOM) to Goa (GOI) for next Saturday, 1 adult, Economy. Filter to show only 'IndiGo' flights and count them. Then filter for only 'Air India' flights and count those. Which airline has more flights and compare the cheapest prices.",
+    "verification_hint": "IndiGo count, Air India count, cheapest prices, comparison"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_06_hotels_jaipur",
+    "task": "Go to Cleartrip and search for hotels in Jaipur for check-in next Monday, check-out next Wednesday (2 nights), 1 room, 2 adults. Filter by '3 Star' and sort by price low-to-high — report cheapest 3-star hotel name and price. Then switch filter to '5 Star' — report cheapest 5-star hotel name and price. What is the price difference per night?",
+    "verification_hint": "Cheapest 3-star and 5-star hotel names/prices, difference"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_07_multicity_flights",
+    "task": "Go to Cleartrip and set up a multi-city flight search: Leg 1 Delhi (DEL) to Mumbai (BOM) departing tomorrow, Leg 2 Mumbai (BOM) to Bangalore (BLR) departing 2 days later. 1 adult, Economy. Report the cheapest combination total price, airlines for each leg, and departure/arrival times.",
+    "verification_hint": "Total price, airline per leg, times per leg"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_08_flights_maa_del",
+    "task": "Go to Cleartrip and search for one-way flights from Chennai (MAA) to Delhi (DEL) for tomorrow, 1 adult, Economy. Report total flight options. Filter for 'Non-stop' and count. Filter for '1 Stop' and count. Compare cheapest non-stop vs cheapest 1-stop price. For the cheapest 1-stop, where is the layover?",
+    "verification_hint": "Total count, non-stop count, 1-stop count, prices, layover city"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_09_hotels_manali",
+    "task": "Go to Cleartrip and search for hotels in Manali for check-in next Friday, check-out next Monday (3 nights), 1 room, 2 adults. Report total hotels available. Filter by '4 Star and above'. How many remain? Sort by guest rating and report the top-rated hotel's name, rating, and price per night.",
+    "verification_hint": "Total count, 4-star+ count, top hotel name/rating/price"
+  },
+  {
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "label": "ct_10_economy_vs_business",
+    "task": "Go to Cleartrip and search for round-trip flights from Delhi (DEL) to Goa (GOI) departing next Friday, returning next Sunday, 2 adults in Economy. Report the cheapest round-trip fare. Then change class to 'Business' and search again. Report the cheapest Business fare. What is the price multiplier of Business over Economy?",
+    "verification_hint": "Economy fare, Business fare, multiplier (e.g. 3.2x)"
+  }
+]

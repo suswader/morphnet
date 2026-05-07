@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
 
 from morphnet.session_manager import InteractiveElement
@@ -29,11 +30,17 @@ from morphnet.session_manager import InteractiveElement
 # ---------------------------------------------------------------------------
 
 _ROLE_MAP = {
-    "textbox": "text field", "spinbutton": "number field",
-    "combobox": "dropdown", "searchbox": "search field",
-    "checkbox": "checkbox", "radio": "radio button",
-    "switch": "toggle", "link": "link", "button": "button",
-    "menuitem": "menu item", "tab": "tab", "slider": "slider",
+    "textbox": "txt", "spinbutton": "num",
+    "combobox": "dd", "searchbox": "search",
+    "checkbox": "chk", "radio": "rad",
+    "switch": "tog", "link": "lnk", "button": "btn",
+    "menuitem": "menu", "tab": "tab", "slider": "slider",
+}
+
+# TOON state abbreviations
+_TOON_STATES = {
+    "checked": "✓", "disabled": "dis", "required": "req",
+    "expanded": "exp", "focused": "foc",
 }
 
 # Roles that are pure rendering noise — make transparent (skip node, recurse children)
@@ -141,10 +148,10 @@ def compress_text(text: str, max_chars: int = 80) -> str:
 # ===================================================================
 
 def _infer_functional_role(el: InteractiveElement) -> str:
-    """Infer what an element functionally IS, not what its DOM tag is.
+    """Infer TOON role abbreviation for an element.
 
-    A div with text "Search for restaurant" is a search trigger.
-    A div with text "Add to Cart" is a button.
+    Uses _ROLE_MAP for known ARIA roles, keyword matching for generic
+    containers (div/span/li), falls back to raw role name.
     """
     base_role = el.role.lower()
     name_lower = (el.name or "").lower()
@@ -154,71 +161,69 @@ def _infer_functional_role(el: InteractiveElement) -> str:
 
     if base_role in ("div", "span", "section", "article", "li", "td", "img", "svg"):
         if any(kw in name_lower for kw in ("search", "find", "look up")):
-            return "search trigger"
+            return "search-btn"
         if any(kw in name_lower for kw in ("add to cart", "buy", "purchase", "checkout")):
-            return "button"
+            return "btn"
         if any(kw in name_lower for kw in ("sign in", "log in", "login", "sign up")):
-            return "button"
-        return "clickable area"
+            return "btn"
+        return "area"
 
     return base_role
 
 
 def format_element(el: InteractiveElement, nearby_context: str | None = None) -> str:
-    """Natural language element description with optional nearby-text context.
+    """TOON (Token-Optimized Object Notation) element description.
 
-    [5] button "ADD" — near: Vietnamese Cold Brew
-    [6] dropdown "Size" — shows "Medium", collapsed
-    [7] text field "Quantity" — contains "1", required
+    Compact format — ~40% fewer tokens than natural language:
+      [5] btn"ADD" |near:Vietnamese Cold Brew
+      [6] dd"Size"="Medium",col
+      [7] txt"Quantity"="1",req
+      [3] chk"Remember me" ✓
     """
-    friendly = _infer_functional_role(el)
-    parts: list[str] = [f"[{el.element_id}]", friendly]
+    role = _infer_functional_role(el)
+    # Core: [N] role"Name"
+    name_part = f'"{el.name}"' if el.name else ""
+    out = f"[{el.element_id}] {role}{name_part}"
 
-    if el.name:
-        parts.append(f'"{el.name}"')
-
-    state_parts: list[str] = []
+    # Value: ="X" or ∅ for empty fields
     if el.value is not None and el.value != "":
-        match el.role:
-            case "textbox" | "searchbox" | "spinbutton":
-                state_parts.append(f'contains "{el.value}"')
-            case "combobox":
-                state_parts.append(f'shows "{el.value}"')
-            case _:
-                state_parts.append(f'value: "{el.value}"')
+        out += f'="{el.value}"'
     elif el.role in ("textbox", "searchbox"):
-        state_parts.append("empty")
+        out += " \u2205"  # ∅ = empty
 
+    # States: compact abbreviations, comma-separated
+    states: list[str] = []
     if "checked" in el.states:
-        state_parts.append("checked")
+        states.append("\u2713")  # ✓
     if "expanded" in el.states:
-        state_parts.append("expanded")
-    elif el.role == "combobox":
-        state_parts.append("collapsed")
+        states.append("exp")
+    elif el.role == "combobox" and "expanded" not in el.states:
+        states.append("col")
     if "disabled" in el.states:
-        state_parts.append("disabled")
+        states.append("dis")
     if "required" in el.states:
-        state_parts.append("required")
+        states.append("req")
     if "focused" in el.states:
-        state_parts.append("focused")
+        states.append("foc")
 
-    if state_parts:
-        parts.append("\u2014")
-        parts.append(", ".join(state_parts))
-
-    # Nearby-text context for generic/short-named elements
-    if nearby_context and _should_add_nearby_context(el):
-        if state_parts:
-            parts.append(f"| near: {nearby_context}")
+    if states:
+        # Append with comma if value already present, else space
+        state_str = ",".join(states)
+        if el.value is not None and el.value != "":
+            out += f",{state_str}"
         else:
-            parts.append(f"\u2014 near: {nearby_context}")
+            out += f" {state_str}"
 
-    return " ".join(parts)
+    # Nearby context for generic/short-named elements
+    if nearby_context and _should_add_nearby_context(el):
+        out += f" |near:{nearby_context}"
+
+    return out
 
 
 def _should_add_nearby_context(el: InteractiveElement) -> bool:
     """Returns True when an element's name is generic and needs disambiguation."""
-    if el.role.lower() not in ("button", "link", "div", "span", "clickable area",
+    if el.role.lower() not in ("button", "link", "div", "span", "area",
                                 "img", "svg", "li", "td"):
         return False
     name = (el.name or "").strip().lower()
@@ -227,6 +232,437 @@ def _should_add_nearby_context(el: InteractiveElement) -> bool:
     if len(name) <= 12:
         return True
     return name in _GENERIC_LABELS
+
+
+# ===================================================================
+# ENRICHMENT REGISTRY — modular element improvement
+# ===================================================================
+
+import logging as _enrich_logging
+_enrich_logger = _enrich_logging.getLogger(__name__)
+
+
+@dataclass
+class EnrichmentResult:
+    """One piece of recovered information for an element."""
+    element_id: int
+    field: str          # "name", "label", "associated_text", "value", "group"
+    value: str
+    source: str         # Which enricher produced this
+    confidence: float   # 0.0-1.0
+
+
+_ENRICHERS: list = []
+
+
+def register_enricher(fn):
+    """Decorator to register an enrichment function."""
+    _ENRICHERS.append(fn)
+    return fn
+
+
+_enricher_failures: dict[str, int] = {}  # enricher name → consecutive failure count
+_ENRICHER_MAX_FAILURES = 3  # Disable after this many consecutive failures
+
+
+async def run_enrichments(
+    elements: list[InteractiveElement],
+    page,
+    axtree: dict | None = None,
+) -> dict[int, list[EnrichmentResult]]:
+    """Run all registered enrichers and collect results.
+
+    Each enricher receives the element list and page, returns a list
+    of EnrichmentResult for elements it can improve.
+    Results are merged by element_id. Highest confidence wins per field.
+
+    Circuit breaker: enrichers that fail _ENRICHER_MAX_FAILURES consecutive
+    times are skipped to prevent log flooding (e.g. SVG-heavy pages crashing
+    enrich_card_grouping every cycle).
+    """
+    all_results: dict[int, list[EnrichmentResult]] = defaultdict(list)
+
+    for enricher in _ENRICHERS:
+        name = enricher.__name__
+        if _enricher_failures.get(name, 0) >= _ENRICHER_MAX_FAILURES:
+            continue  # Circuit breaker: skip this enricher
+        try:
+            results = await enricher(elements, page, axtree)
+            for r in results:
+                all_results[r.element_id].append(r)
+            _enricher_failures[name] = 0  # Reset on success
+        except Exception as exc:
+            _enricher_failures[name] = _enricher_failures.get(name, 0) + 1
+            fail_count = _enricher_failures[name]
+            if fail_count >= _ENRICHER_MAX_FAILURES:
+                _enrich_logger.warning(
+                    "Enricher %s disabled after %d consecutive failures: %s",
+                    name, fail_count, exc,
+                )
+            else:
+                _enrich_logger.warning("Enricher %s failed (%d/%d): %s",
+                                       name, fail_count, _ENRICHER_MAX_FAILURES, exc)
+
+    return all_results
+
+
+def apply_enrichments(
+    elements: list[InteractiveElement],
+    enrichments: dict[int, list[EnrichmentResult]],
+) -> dict[int, str]:
+    """Apply enrichment results to elements. Returns enriched_context map.
+
+    For 'name' field: updates el.name if currently empty/unnamed.
+    For 'associated_text': builds a context map for the FORMAT phase.
+    """
+    enriched_context: dict[int, str] = {}
+    for el in elements:
+        el_enrichments = enrichments.get(el.element_id, [])
+        for result in sorted(el_enrichments, key=lambda r: -r.confidence):
+            if result.field == "name" and (not el.name or el.name.strip() in ("", "(unnamed)")):
+                el.name = result.value
+            elif result.field == "associated_text":
+                if el.element_id not in enriched_context:
+                    enriched_context[el.element_id] = result.value
+    return enriched_context
+
+
+@register_enricher
+async def enrich_label_association(elements, page, axtree):
+    """Associate form controls with their visual labels via DOM proximity."""
+    unnamed_controls = [
+        el for el in elements
+        if el.role in ("checkbox", "radio", "switch", "slider")
+        and (not el.name or el.name.strip() == "")
+    ]
+    if not unnamed_controls:
+        return []
+
+    selectors = [el.selector for el in unnamed_controls if el.selector]
+    if not selectors:
+        return []
+
+    results_raw = await page.evaluate("""(selectors) => {
+        return selectors.map(sel => {
+            try {
+                const el = document.querySelector(sel);
+                if (!el) return {sel, label: null};
+                let container = el.parentElement;
+                for (let i = 0; i < 3 && container; i++) {
+                    const texts = [];
+                    for (const child of container.childNodes) {
+                        if (child.nodeType === Node.TEXT_NODE) {
+                            const t = child.textContent.trim();
+                            if (t) texts.push(t);
+                        }
+                        if (child.nodeType === Node.ELEMENT_NODE && child !== el) {
+                            const roles = ['checkbox', 'radio', 'input', 'select', 'button'];
+                            if (!roles.includes(child.tagName.toLowerCase()) &&
+                                !child.querySelector('input, select, button')) {
+                                const t = child.textContent.trim();
+                                if (t && t.length < 100) texts.push(t);
+                            }
+                        }
+                    }
+                    if (texts.length > 0) return {sel, label: texts.join(' ').substring(0, 80)};
+                    container = container.parentElement;
+                }
+                const next = el.nextElementSibling;
+                if (next && next.textContent.trim()) {
+                    return {sel, label: next.textContent.trim().substring(0, 80)};
+                }
+                const prev = el.previousElementSibling;
+                if (prev && prev.textContent.trim()) {
+                    return {sel, label: prev.textContent.trim().substring(0, 80)};
+                }
+                return {sel, label: null};
+            } catch (e) { return {sel, label: null}; }
+        });
+    }""", selectors)
+
+    results = []
+    selector_to_el = {el.selector: el for el in unnamed_controls}
+    for item in (results_raw or []):
+        if item.get("label"):
+            el = selector_to_el.get(item["sel"])
+            if el:
+                results.append(EnrichmentResult(
+                    element_id=el.element_id, field="name",
+                    value=item["label"], source="label_association",
+                    confidence=0.85,
+                ))
+    return results
+
+
+@register_enricher
+async def enrich_unnamed_elements(elements, page, axtree):
+    """Recover names for elements the JS enumerator couldn't name."""
+    unnamed = [
+        el for el in elements
+        if not el.name or el.name.strip() in ("", "(unnamed)")
+    ]
+    if not unnamed:
+        return []
+
+    selectors = [el.selector for el in unnamed if el.selector]
+    if not selectors:
+        return []
+
+    recovered = await page.evaluate("""(selectors) => {
+        return selectors.map(sel => {
+            try {
+                const el = document.querySelector(sel);
+                if (!el) return {sel, name: null, source: null};
+                const img = el.querySelector('img[alt], svg[aria-label]');
+                if (img) {
+                    const alt = img.getAttribute('alt') || img.getAttribute('aria-label') || '';
+                    if (alt.trim()) return {sel, name: alt.trim().substring(0, 60), source: 'img_alt'};
+                }
+                const svgTitle = el.querySelector('svg title');
+                if (svgTitle && svgTitle.textContent.trim()) {
+                    return {sel, name: svgTitle.textContent.trim(), source: 'svg_title'};
+                }
+                for (const attr of ['data-label', 'data-name', 'data-tooltip',
+                                     'data-original-title', 'data-content']) {
+                    const v = el.getAttribute(attr);
+                    if (v && v.trim()) return {sel, name: v.trim().substring(0, 60), source: 'data_attr'};
+                }
+                const testId = el.getAttribute('data-testid');
+                if (testId) {
+                    const humanized = testId.replace(/[-_]/g, ' ').replace(/^(btn|cta|el|comp)\\s+/i, '');
+                    if (humanized.length > 1) return {sel, name: humanized.substring(0, 60), source: 'data_testid'};
+                }
+                let parent = el.parentElement;
+                for (let i = 0; i < 3 && parent; i++) {
+                    const interactives = parent.querySelectorAll(
+                        'a, button, input, select, textarea, [role="button"], [onclick], [tabindex]'
+                    );
+                    if (interactives.length === 1) {
+                        const parentText = parent.textContent.trim();
+                        if (parentText && parentText.length < 60 && parentText.length > 1) {
+                            return {sel, name: parentText, source: 'ancestor_text'};
+                        }
+                    }
+                    parent = parent.parentElement;
+                }
+                return {sel, name: null, source: null};
+            } catch (e) { return {sel, name: null, source: null}; }
+        });
+    }""", selectors)
+
+    results = []
+    selector_to_el = {el.selector: el for el in unnamed}
+    for item in (recovered or []):
+        if item.get("name"):
+            el = selector_to_el.get(item["sel"])
+            if el:
+                results.append(EnrichmentResult(
+                    element_id=el.element_id, field="name",
+                    value=item["name"],
+                    source=f"unnamed_recovery:{item['source']}",
+                    confidence=0.7,
+                ))
+    return results
+
+
+@register_enricher
+async def enrich_card_grouping(elements, page, axtree):
+    """Detect repeated container patterns and group elements within them."""
+    groups = await page.evaluate("""() => {
+        const candidates = new Map();
+        const all = document.querySelectorAll('[class]');
+        for (const el of all) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width < 50 || rect.height < 30) continue;
+            // className is SVGAnimatedString on SVG elements — coerce to string
+            const cn = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
+            if (!cn) continue;
+            // Filter SVG/IMG/PICTURE from child tag fingerprint — they vary per card
+            const childTags = [...el.children]
+                .filter(c => {
+                    const t = c.tagName;
+                    return t !== 'SVG' && t !== 'svg' && t !== 'IMG' && t !== 'PICTURE' && t !== 'CANVAS';
+                })
+                .map(c => c.tagName).join(',');
+            const fp = cn.split(' ').sort().join('.') + '|' + childTags;
+            if (!candidates.has(fp)) candidates.set(fp, []);
+            candidates.get(fp).push(el);
+        }
+        const groups = [];
+        for (const [fp, els] of candidates) {
+            if (els.length >= 3) {
+                groups.push(els.slice(0, 30).map(el => {
+                    const text = el.textContent.trim().substring(0, 100).replace(/\\s+/g, ' ');
+                    const rect = el.getBoundingClientRect();
+                    return {
+                        text: text,
+                        top: Math.round(rect.top + window.scrollY),
+                        bottom: Math.round(rect.bottom + window.scrollY),
+                        left: Math.round(rect.left),
+                        right: Math.round(rect.right),
+                    };
+                }));
+            }
+        }
+        return groups;
+    }""")
+
+    results = []
+    for group in (groups or []):
+        for container in group:
+            for el in elements:
+                bb = el.bounding_box
+                if not bb:
+                    continue
+                if (bb.get("y", 0) >= container["top"]
+                    and bb.get("y", 0) <= container["bottom"]
+                    and bb.get("x", 0) >= container["left"]
+                    and bb.get("x", 0) <= container["right"]):
+                    results.append(EnrichmentResult(
+                        element_id=el.element_id, field="associated_text",
+                        value=container["text"][:80], source="card_grouping",
+                        confidence=0.75,
+                    ))
+    return results
+
+
+@register_enricher
+async def enrich_lazy_loaded_content(elements, page, axtree):
+    """Extract content from data attributes and CSS-rendered text the AXTree misses."""
+    hidden_data = await page.evaluate("""() => {
+        const results = [];
+        // --- 1. data-* attribute prices ---
+        const priceEls = document.querySelectorAll(
+            '[data-price], [data-amount], [data-value], [data-cost],' +
+            '[data-sale-price], [data-original-price], [data-display-price]'
+        );
+        for (const el of priceEls) {
+            for (const attr of el.attributes) {
+                if (attr.name.startsWith('data-') && /price|amount|value|cost/i.test(attr.name)) {
+                    const rect = el.getBoundingClientRect();
+                    results.push({
+                        type: 'price_data', value: attr.value, attr: attr.name,
+                        text: el.textContent.trim().substring(0, 60),
+                        y: Math.round(rect.top + window.scrollY),
+                        x: Math.round(rect.left),
+                    });
+                }
+            }
+        }
+        // --- 2. CSS-rendered prices (visible text not in AXTree) ---
+        // Prices often live in JS-rendered elements the AXTree skips.
+        // Strategy: scan semantic attributes first, then walk visible
+        // leaf-ish elements testing against a currency regex.
+        // No CSS class name matching — purely attribute + content based.
+        const seenTexts = new Set();
+        const currencyRe = /(?:\\u20b9|Rs\\.?|\\$|\\u20ac|\\u00a3|\\u00a5|USD|INR|EUR|GBP)\\s*[\\d,]+\\.?\\d*/;
+        try {
+            // 2a. Semantic attribute selectors (structured, not class-based)
+            const semanticPriceEls = document.querySelectorAll(
+                '[itemprop="price"], [itemprop="priceCurrency"], ' +
+                '[data-test-price], [data-testid="price"]'
+            );
+            for (const el of semanticPriceEls) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                const text = (el.innerText || el.textContent || '').trim();
+                if (!text || text.length > 80 || seenTexts.has(text)) continue;
+                seenTexts.add(text);
+                results.push({
+                    type: 'visible_price', value: text,
+                    y: Math.round(rect.top + window.scrollY),
+                    x: Math.round(rect.left),
+                });
+            }
+            // 2b. Walk visible small elements and test for currency pattern.
+            // This catches prices regardless of class naming convention.
+            const walker = document.createTreeWalker(
+                document.body, NodeFilter.SHOW_ELEMENT,
+                { acceptNode(node) {
+                    if (node.children.length > 3) return NodeFilter.FILTER_SKIP;
+                    const r = node.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) return NodeFilter.FILTER_SKIP;
+                    if (r.width > 400 || r.height > 80) return NodeFilter.FILTER_SKIP;
+                    return NodeFilter.FILTER_ACCEPT;
+                }}
+            );
+            let node;
+            while ((node = walker.nextNode()) && results.length < 200) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (!text || text.length > 80 || text.length < 2) continue;
+                if (seenTexts.has(text)) continue;
+                if (!currencyRe.test(text)) continue;
+                seenTexts.add(text);
+                const rect = node.getBoundingClientRect();
+                results.push({
+                    type: 'visible_price', value: text,
+                    y: Math.round(rect.top + window.scrollY),
+                    x: Math.round(rect.left),
+                });
+            }
+        } catch(e) {}
+        // --- 3. Ratings ---
+        const ratingEls = document.querySelectorAll(
+            '[data-rating], [data-score], [data-stars], [aria-label*="rating"],' +
+            '[aria-label*="stars"]'
+        );
+        for (const el of ratingEls) {
+            const rating = el.getAttribute('data-rating') ||
+                          el.getAttribute('data-score') ||
+                          el.getAttribute('data-stars') ||
+                          el.getAttribute('aria-label') || '';
+            if (rating) {
+                const rect = el.getBoundingClientRect();
+                results.push({
+                    type: 'rating_data', value: rating,
+                    text: el.textContent.trim().substring(0, 30),
+                    y: Math.round(rect.top + window.scrollY),
+                    x: Math.round(rect.left),
+                });
+            }
+        }
+        return results.slice(0, 200);
+    }""")
+
+    results = []
+    for item in (hidden_data or []):
+        nearest_el = None
+        min_dist = float('inf')
+        for el in elements:
+            bb = el.bounding_box
+            if not bb:
+                continue
+            dist = abs(bb.get("y", 0) - item.get("y", 0)) + abs(bb.get("x", 0) - item.get("x", 0))
+            if dist < min_dist and dist < 200:
+                min_dist = dist
+                nearest_el = el
+        if nearest_el:
+            results.append(EnrichmentResult(
+                element_id=nearest_el.element_id, field="associated_text",
+                value=f"{item['type']}: {item['value']}",
+                source="lazy_loaded", confidence=0.6,
+            ))
+    return results
+
+
+def analyze_page_context(elements: list[InteractiveElement]) -> dict:
+    """Classify the current page state for contextual prompt injection."""
+    empty_fields = sum(1 for el in elements
+                       if el.role in ("textbox", "searchbox", "combobox", "spinbutton")
+                       and not el.value)
+    search_fields = sum(1 for el in elements
+                        if el.role in ("searchbox",)
+                        or (el.role not in ("button", "link")
+                            and "search" in (el.name or "").lower()))
+    checkboxes = sum(1 for el in elements if el.role in ("checkbox", "radio"))
+    return {
+        "has_form": empty_fields >= 2,
+        "has_search": search_fields > 0,
+        "has_listing": len(elements) > 20,
+        "has_filters": checkboxes >= 3,
+        "empty_field_count": empty_fields,
+        "total_elements": len(elements),
+    }
 
 
 # ===================================================================
@@ -354,6 +790,7 @@ def build_cu_representation(
     *,
     exclude_footer: bool = True,
     max_text_chars: int = 200,
+    enriched_context: dict[int, str] | None = None,
 ) -> str:
     """Build section-based page representation for CU agent.
 
@@ -395,6 +832,13 @@ def build_cu_representation(
         exclude_footer=exclude_footer,
         max_text_chars=max_text_chars,
     )
+
+    # Merge enriched context (from enrichment registry) as fallback
+    # for elements that didn't get context from the AXTree walk
+    if enriched_context:
+        for eid, ctx_text in enriched_context.items():
+            if eid not in context_map:
+                context_map[eid] = ctx_text
 
     # Include ALL visible interactive elements in the summary.
     # Footer exclusion is handled by _is_footer_node() during the walk.
@@ -757,45 +1201,43 @@ def format_elements_summary(
     elements: list[InteractiveElement],
     context_map: dict[int, str] | None = None,
 ) -> str:
-    """Generate Fields + Actionable summary.
+    """TOON summary: Fields + Actions in compact notation.
 
-    When context_map is provided, generic buttons/links get
-    "near: ..." annotations matching what appears inline in the tree.
+    Fields:
+      [1] txt"Email" ∅
+      [2] txt"Password" ∅,req
+    Actions:
+      [3] btn"Login"
+      [4] lnk"Sign up" |near:Already have account?
     """
     fields: list[str] = []
     actionable: list[str] = []
 
     for el in elements:
-        friendly = _infer_functional_role(el)
+        role = _infer_functional_role(el)
 
         if el.role in ("textbox", "searchbox", "spinbutton", "combobox"):
-            val = f'"{el.value}"' if el.value else "empty"
-            extra = ", required" if "required" in el.states else ""
-            fields.append(
-                f'  [{el.element_id}] "{el.name}" ({val}) \u2014 {friendly}{extra}'
-            )
+            val = f'="{el.value}"' if el.value else " \u2205"
+            extra = ",req" if "required" in el.states else ""
+            fields.append(f'  [{el.element_id}] {role}"{el.name}"{val}{extra}')
         elif el.role in ("checkbox", "radio", "switch"):
-            state = "checked" if "checked" in el.states else "unchecked"
-            fields.append(
-                f'  [{el.element_id}] "{el.name}" ({state}) \u2014 {friendly}'
-            )
+            state = " \u2713" if "checked" in el.states else ""
+            fields.append(f'  [{el.element_id}] {role}"{el.name}"{state}')
         else:
-            label = el.name or "(unnamed)"
+            label = el.name or "?"
             ctx = ""
             if context_map and el.element_id in context_map:
-                ctx = f" | near: {context_map[el.element_id]}"
-            actionable.append(
-                f'  [{el.element_id}] "{label}" \u2014 {friendly}{ctx}'
-            )
+                ctx = f" |near:{context_map[el.element_id]}"
+            actionable.append(f'  [{el.element_id}] {role}"{label}"{ctx}')
 
     lines: list[str] = []
     if fields:
-        lines.append("--- Fields ---")
+        lines.append("Fields:")
         lines.extend(fields)
     if actionable:
         if fields:
             lines.append("")
-        lines.append("--- Actionable ---")
+        lines.append("Actions:")
         lines.extend(actionable)
     return "\n".join(lines)
 
@@ -1449,7 +1891,7 @@ def _collect_chrome_labels(node: dict, items: list[str], max_items: int = 6) -> 
 # MCP Parameter Context — recipe-based extraction for parameter generation
 # ===================================================================
 
-async def build_mcp_parameter_context(
+async def build_tool_param_context(
     *,
     recipe: list[dict],
     tool_name: str,
@@ -1490,7 +1932,7 @@ async def build_mcp_parameter_context(
     # Last successful request template
     if tool_examples:
         latest = tool_examples[-1]
-        body = latest.get("request_body") if isinstance(latest, dict) else None
+        body = latest.get("request_params") or latest.get("body_params") if isinstance(latest, dict) else None
         if body:
             lines.append("LAST SUCCESSFUL REQUEST:")
             for k, v in (body if isinstance(body, dict) else {}).items():
@@ -1501,7 +1943,7 @@ async def build_mcp_parameter_context(
             )
             lines.append("")
 
-    # Extract current values for each recipe step
+    # Extract current values for each recipe step (with fallback strategies)
     lines.append("PARAMETERS:")
     lines.append("")
 
@@ -1510,15 +1952,13 @@ async def build_mcp_parameter_context(
         param_name = param_path.split(".")[-1]
         classification = step.get("classification", "unknown")
         description = step.get("description", "")
-        source_type = step.get("source_type", "")
-        config = step.get("source_config", {})
 
         lines.append(f"  {param_name} [{classification}]:")
         lines.append(f"    {description}")
 
-        # Execute extraction
-        extracted = await _execute_extraction_step(
-            source_type, config, session, mcp_response_cache,
+        # Execute extraction with strategy fallback
+        extracted = await _execute_extraction_with_fallback(
+            step, session, mcp_response_cache,
         )
 
         if isinstance(extracted, list):
@@ -1543,7 +1983,7 @@ async def build_mcp_parameter_context(
         for i, ex in enumerate(tool_examples, 1):
             if not isinstance(ex, dict):
                 continue
-            body = ex.get("request_body")
+            body = ex.get("request_params") or ex.get("body_params")
             if body:
                 import json
                 lines.append(f"Example {i}:")
@@ -1563,6 +2003,198 @@ async def build_mcp_parameter_context(
             pass
 
     return "\n".join(lines)
+
+
+async def _execute_extraction_with_fallback(
+    step: dict,
+    session: Any,
+    mcp_response_cache: dict[str, Any],
+) -> str | list[dict] | None:
+    """Execute extraction with strategy list fallback.
+
+    If the step has a 'strategies' list, try each in order until one succeeds.
+    Otherwise, use the step's source_type + source_config as the single strategy.
+    On fallback success, prepend the working strategy to the list for next time.
+    """
+    strategies = step.get("strategies", [])
+
+    if strategies:
+        # Try strategies in order (sorted by success rate)
+        for strat in strategies:
+            result = await _execute_extraction_step(
+                strat.get("source_type", ""),
+                strat.get("source_config", {}),
+                session,
+                mcp_response_cache,
+            )
+            if result is not None:
+                strat["success_count"] = strat.get("success_count", 0) + 1
+                return result
+            strat["fail_count"] = strat.get("fail_count", 0) + 1
+
+    # Primary strategy: use step's own source_type + source_config
+    source_type = step.get("source_type", "")
+    config = step.get("source_config", {})
+    result = await _execute_extraction_step(
+        source_type, config, session, mcp_response_cache,
+    )
+    if result is not None:
+        return result
+
+    # Broadening: search by parameter name keywords in cookies/meta/hidden fields
+    classification = step.get("classification", "")
+    if classification in ("ephemeral", "page_context") and session.page:
+        broadened = await _broaden_ephemeral(step, session)
+        if broadened is not None:
+            # Self-healing: create a new exact strategy and prepend
+            new_strat = {
+                "source_type": broadened["source_type"],
+                "source_config": broadened["source_config"],
+                "specificity": "broadened",
+                "success_count": 1,
+                "fail_count": 0,
+            }
+            existing = step.setdefault("strategies", [])
+            existing.insert(0, new_strat)
+            return broadened["value"]
+
+    # Broadening for chained params: search all cached API responses
+    if classification == "chained":
+        broadened = _broaden_chained(step, session, mcp_response_cache)
+        if broadened is not None:
+            return broadened
+
+    return None
+
+
+async def _broaden_ephemeral(
+    step: dict, session: Any,
+) -> dict | None:
+    """Search cookies/meta/hidden fields by parameter NAME keyword match.
+
+    Returns {"value": str, "source_type": str, "source_config": dict} on success.
+    NEVER matches by value regex — only by parameter name keywords.
+    """
+    import re
+    param_name = step.get("param_path", "").split(".")[-1].lower()
+    if not param_name:
+        return None
+
+    keywords = [k for k in re.split(r"[_\-.]", param_name) if len(k) >= 3]
+    if not keywords:
+        return None
+
+    # Search cookies
+    try:
+        cookies = await session._context.cookies()
+        for c in cookies:
+            if any(kw in c["name"].lower() for kw in keywords):
+                return {
+                    "value": c["value"],
+                    "source_type": "cookie",
+                    "source_config": {"key": c["name"]},
+                }
+    except Exception:
+        pass
+
+    # Search meta tags
+    try:
+        metas = await session.page.evaluate("""() => {
+            const results = [];
+            for (const el of document.querySelectorAll('meta[name], meta[property]')) {
+                const name = el.getAttribute('name') || el.getAttribute('property') || '';
+                const content = el.getAttribute('content') || '';
+                if (content) results.push({name, content});
+            }
+            return results;
+        }""")
+        for m in (metas or []):
+            if any(kw in m["name"].lower() for kw in keywords):
+                return {
+                    "value": m["content"],
+                    "source_type": "meta_tag",
+                    "source_config": {"selector": f'meta[name="{m["name"]}"]'},
+                }
+    except Exception:
+        pass
+
+    # Search hidden form fields
+    try:
+        hiddens = await session.page.evaluate("""() => {
+            const results = [];
+            for (const el of document.querySelectorAll('input[type="hidden"]')) {
+                if (el.name && el.value) results.push({name: el.name, value: el.value});
+            }
+            return results;
+        }""")
+        for h in (hiddens or []):
+            if any(kw in h["name"].lower() for kw in keywords):
+                return {
+                    "value": h["value"],
+                    "source_type": "dom_field",
+                    "source_config": {"selector": f'input[name="{h["name"]}"]'},
+                }
+    except Exception:
+        pass
+
+    return None
+
+
+def _broaden_chained(
+    step: dict, session: Any, mcp_response_cache: dict[str, Any],
+) -> str | None:
+    """Search ALL cached/captured API responses for a value by param name.
+
+    When a chained param's exact endpoint_identity + json_path fails,
+    scan all available responses for a key matching the parameter name.
+    """
+    import re
+    param_name = step.get("param_path", "").split(".")[-1].lower()
+    if not param_name:
+        return None
+
+    keywords = [k for k in re.split(r"[_\-.]", param_name) if len(k) >= 3]
+    if not keywords:
+        keywords = [param_name]  # Short param names like "id"
+
+    # Search MCP response cache
+    for endpoint_id, body in mcp_response_cache.items():
+        if not isinstance(body, dict):
+            continue
+        found = _search_dict_by_key(body, keywords)
+        if found is not None:
+            return str(found)[:200]
+
+    # Search browser captured traffic
+    for req in reversed(session.get_captured_traffic()):
+        if req.response_body_parsed and isinstance(req.response_body_parsed, dict):
+            found = _search_dict_by_key(req.response_body_parsed, keywords)
+            if found is not None:
+                return str(found)[:200]
+
+    return None
+
+
+def _search_dict_by_key(obj: Any, keywords: list[str], depth: int = 0) -> Any | None:
+    """Recursively search a dict for keys matching any keyword. Returns first match."""
+    if depth > 5:
+        return None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if any(kw in k.lower() for kw in keywords) and v is not None:
+                if isinstance(v, (str, int, float, bool)):
+                    return v
+                if isinstance(v, list) and v and isinstance(v[0], (str, int, float)):
+                    return v[0]
+            result = _search_dict_by_key(v, keywords, depth + 1)
+            if result is not None:
+                return result
+    elif isinstance(obj, list):
+        for item in obj[:5]:
+            result = _search_dict_by_key(item, keywords, depth + 1)
+            if result is not None:
+                return result
+    return None
 
 
 async def _execute_extraction_step(

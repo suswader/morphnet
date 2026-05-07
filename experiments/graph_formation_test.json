@@ -1,0 +1,47 @@
+[
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "graph_01_nagpur_raipur",
+    "task": "Search for trains from Nagpur to Raipur on 20 April 2026 on ConfirmTkt. Tell me the name of any one train on this route.",
+    "verification_hint": "Any valid train name on this route",
+    "expected_answer_type": "detail",
+    "difficulty": "medium"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "graph_02_panaji_hubli",
+    "task": "Search for trains from Madgaon (Goa) to Hubli on 21 April 2026 on ConfirmTkt. Tell me the name of any one train on this route.",
+    "verification_hint": "Any valid train name on this route",
+    "expected_answer_type": "detail",
+    "difficulty": "medium"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "graph_03_bhopal_indore",
+    "task": "Search for trains from Bhopal to Indore on 22 April 2026 on ConfirmTkt. Tell me the name of any one train on this route.",
+    "verification_hint": "Any valid train name on this route",
+    "expected_answer_type": "detail",
+    "difficulty": "medium"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "graph_04_mysore_mangalore",
+    "task": "Search for trains from Mysore to Mangalore on 23 April 2026 on ConfirmTkt. Tell me the name of any one train on this route.",
+    "verification_hint": "Any valid train name on this route",
+    "expected_answer_type": "detail",
+    "difficulty": "medium"
+  },
+  {
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "label": "graph_05_ranchi_varanasi",
+    "task": "Search for trains from Ranchi to Varanasi on 24 April 2026 on ConfirmTkt. Tell me the name of any one train on this route.",
+    "verification_hint": "Any valid train name on this route",
+    "expected_answer_type": "detail",
+    "difficulty": "medium"
+  }
+]

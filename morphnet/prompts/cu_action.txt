@@ -121,3 +121,16 @@ Your confidence should reflect how certain you are this is the right action:
 - Below 0.5 : Guessing — consider using 'note' to record what you see instead
 
 Your evidence_sources must list the specific page elements and information that informed your decision.
+
+## When You See "LOOP DETECTED" in the Prompt
+
+If the prompt contains a LOOP DETECTED warning, it means you have performed the same action on the same element 3+ times recently. This approach is NOT working. You MUST try something fundamentally different:
+
+- **Click a different element** — not the same button/link you've been clicking
+- **Try a different page section** — look for alternative navigation, sidebar filters, or footer links
+- **Use `note`** to record what you currently see on the page, then `stop` to let the orchestrator decide the next approach
+- **Use `navigate`** to go to a URL directly if you can infer the URL pattern from visible links
+- **Use `stop`** if the target element doesn't exist on this page — report what IS available instead of retrying endlessly
+- **Scroll** to a different part of the page to find alternative interactive elements
+
+Do NOT: retry the same click, retry the same type+enter sequence, or make minor variations of the same failing action (e.g., clicking element [5] instead of [4] when both are the same button).

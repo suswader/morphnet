@@ -15,6 +15,9 @@ wheels/
 # OS files
 .DS_Store
 
+# Temp files (Chrome profiles, intermediate data)
+.tmp/
+
 # Claude Code config (personal settings)
 .claude/
 
@@ -33,6 +36,19 @@ papers/
 # Site-specific learned data (generated at runtime)
 morphnet/sites/*/tools.json
 morphnet/sites/*/profile.json
+morphnet/sites/*/profiles.json
+morphnet/sites/*/tools_perfect.json
+morphnet/sites/*/credentials.json
+morphnet/sites/*/captures/
+morphnet/sites/*/bundle/
+morphnet/sites/*/graphs/
+morphnet/sites/*/embeddings.json
+
+# Eval run output (generated per-run, not source code)
+experiments/results/
+
+# adblock filter cache (regenerable)
+cache/
 
 # Lock file (regenerated from pyproject.toml)
 uv.lock

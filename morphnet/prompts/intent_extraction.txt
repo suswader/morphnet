@@ -1,0 +1,13 @@
+Extract parameter values from a subtask description to run a known workflow.
+
+Each parameter belongs to a specific step in the workflow. Same-named parameters on DIFFERENT steps require DIFFERENT values.
+
+For example, if the workflow has two auto-suggest steps (source and destination), and both need a "searchString" parameter:
+- Source auto-suggest searchString = the source city/station name
+- Destination auto-suggest searchString = the destination city/station name
+
+Rules:
+1. Use the node description and example value to understand what each parameter needs.
+2. Match the format of the example value when possible (e.g., if example is "29-04-2026", use DD-MM-YYYY format for dates).
+3. If a parameter cannot be extracted confidently, set its value to null.
+4. Never combine multiple values into one parameter — each gets exactly one value.

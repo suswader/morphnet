@@ -25,7 +25,7 @@ from morphnet.session_manager import (
 from morphnet.trace import TaskTrace, Evidence
 
 logger = logging.getLogger(__name__)
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 # Sentinel for _extract_json_path — distinguishes "path not found" from "value is None"
 _JSON_MISSING = object()
@@ -662,7 +662,10 @@ class Reflector:
                 if elements_added > 0:
                     verdict, reason = "success", f"{elements_added} new elements revealed"
                 else:
-                    verdict, reason = "ambiguous", "Scroll executed but no new elements appeared"
+                    # Deterministic failure — 0 new elements means scroll had no effect.
+                    # Do NOT send to Stage 3 LLM; it overrides to "success" ~96% of the time,
+                    # causing infinite scroll loops (observed on LEGO, BMS, ConfirmTkt).
+                    verdict, reason = "failure", "Scroll produced no new elements"
 
             case "note":
                 verdict, reason = "success", "Note recorded"
@@ -803,24 +806,31 @@ class Reflector:
 
     @staticmethod
     def _is_submit_element(action: dict, elements: list[InteractiveElement]) -> bool:
-        """Check if the clicked element looks like a submit button."""
+        """Check if the clicked element is a submit control.
+
+        Uses structural signals only:
+        1. type="submit" (HTML spec: this IS a submit button)
+        2. role="button" inside a form (element's selector contains 'form')
+        3. Element has form-related attributes (action, method, formaction)
+        """
         element_id = action.get("element_id")
         if element_id is None:
             return False
         for el in elements:
             if el.element_id == element_id:
-                name_lower = (el.name or "").lower()
-                role_lower = el.role.lower()
                 type_lower = (el.element_type or "").lower()
-                return (
-                    role_lower == "button"
-                    or type_lower == "submit"
-                    or any(kw in name_lower for kw in (
-                        "submit", "sign in", "log in", "login", "register",
-                        "create", "save", "send", "add to cart", "checkout",
-                        "confirm", "apply", "update", "place order",
-                    ))
-                )
+                # Definitive: input[type=submit] or button[type=submit]
+                if type_lower == "submit":
+                    return True
+                # Element has formaction attribute (HTML spec submit override)
+                attrs = el.attributes or {}
+                if attrs.get("formaction") or attrs.get("formmethod"):
+                    return True
+                # Button/link inside a form — check selector for form ancestry
+                role_lower = el.role.lower()
+                if role_lower == "button" and "form" in (el.selector or "").lower():
+                    return True
+                return False
         return False
 
     # ===================================================================
@@ -1076,22 +1086,25 @@ class Reflector:
             # Check for GraphQL errors inside 200 response
             if isinstance(response_body, dict) and "errors" in response_body:
                 errors = response_body["errors"]
-                error_msgs = [e.get("message", str(e)) for e in errors] if isinstance(errors, list) else [str(errors)]
-                verdict = {
-                    "success": False,
-                    "confidence": 0.9,
-                    "failure_reason": f"GraphQL errors: {error_msgs}",
-                    "response_matches_intent": False,
-                    "intent_mismatch_detail": f"GraphQL error in response: {error_msgs[0]}",
-                    "page_state_verified": False,
-                    "recommendation": "retry_mcp",
-                    "response_summary": f"GraphQL errors: {error_msgs}",
-                    "reasoning": "GraphQL response contains errors array despite 200 status.",
-                    "evidence_sources": [f"graphql_errors: {error_msgs}"],
-                }
-                span.set_outcome("failure")
-                span.set_reasoning(verdict["reasoning"])
-                return verdict
+                if errors:  # Empty list = success in GraphQL spec
+                    error_msgs = [e.get("message", str(e)) for e in errors] if isinstance(errors, list) else [str(errors)]
+                    if not error_msgs:
+                        error_msgs = ["(unknown GraphQL error)"]
+                    verdict = {
+                        "success": False,
+                        "confidence": 0.9,
+                        "failure_reason": f"GraphQL errors: {error_msgs}",
+                        "response_matches_intent": False,
+                        "intent_mismatch_detail": f"GraphQL error in response: {error_msgs[0]}",
+                        "page_state_verified": False,
+                        "recommendation": "retry_mcp",
+                        "response_summary": f"GraphQL errors: {error_msgs}",
+                        "reasoning": "GraphQL response contains errors array despite 200 status.",
+                        "evidence_sources": [f"graphql_errors: {error_msgs}"],
+                    }
+                    span.set_outcome("failure")
+                    span.set_reasoning(verdict["reasoning"])
+                    return verdict
 
             evidence.append(f"http_status: {http_status}")
 

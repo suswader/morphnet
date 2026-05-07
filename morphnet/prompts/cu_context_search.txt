@@ -1,0 +1,7 @@
+## Search Interaction
+
+This page has a search field. When searching:
+- Type the query into the search field.
+- Wait for autocomplete suggestions if they appear (use 'wait' action).
+- Either click a suggestion or press Enter to search.
+- Do NOT type and press Enter in the same action.
