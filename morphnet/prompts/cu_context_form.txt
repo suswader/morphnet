@@ -1,7 +1,0 @@
-## Form Filling
-
-This page has form fields. Fill all required fields before submitting.
-- Type text first, then submit with click or Enter as a SEPARATE action.
-- Check field values in the AXTree after typing to confirm they're set.
-- For dropdowns: use 'select' with the option text, not 'type'.
-- For autocomplete fields: type the query, wait for suggestions, then click the right one.

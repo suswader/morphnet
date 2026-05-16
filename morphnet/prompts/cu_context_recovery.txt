@@ -1,8 +1,0 @@
-## Recovery After Failure
-
-The previous action failed. Try a fundamentally different approach:
-- Click a DIFFERENT element — not the same one that failed.
-- Try a different page section — sidebar, filters, footer links.
-- Use 'navigate' to go to a URL directly if you can infer the pattern.
-- Use 'note' to record what you see, then 'stop' if the target doesn't exist.
-- Do NOT retry the same failing action with minor variations.

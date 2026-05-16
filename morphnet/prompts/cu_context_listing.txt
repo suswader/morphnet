@@ -1,8 +1,0 @@
-## Listing Page
-
-This page has many items. To extract information:
-- Use 'note' to record items as you see them (name, price, rating, etc.).
-- Scroll down to reveal more items if needed.
-- If scrolling reveals no new content after 2 attempts, all items are loaded.
-- Do NOT click into individual items unless you need detail not visible on the listing.
-- The AXTree already shows item names, prices, and ratings on listing cards.
