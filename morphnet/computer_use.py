@@ -20,7 +20,7 @@ from typing import Any
 
 from morphnet.session_manager import (
     SessionManager, InteractiveElement, CapturedRequest, ActionResult,
-    call_gemini,
+    call_gemini_async,
 )
 from morphnet.reflector import Reflector
 from morphnet.trace import TaskTrace, Evidence
@@ -1109,7 +1109,7 @@ class ComputerUseAgent:
 
         effective_prompt = system_prompt or self._cu_prompt
         with self.trace.span("cu_agent", "action_selected", f"Step {step}: selecting action") as span:
-            action = call_gemini(
+            action = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=contents,
                 response_schema=CU_ACTION_SCHEMA,
@@ -1171,7 +1171,7 @@ class ComputerUseAgent:
 
         try:
             if plan_type == "fill_form":
-                exec_result = call_gemini(
+                exec_result = await call_gemini_async(
                     model="gemini-3-flash-preview",
                     contents=exec_contents,
                     response_schema=FILL_FORM_SCHEMA,
@@ -1184,7 +1184,7 @@ class ComputerUseAgent:
                 return result
 
             elif plan_type == "search_and_select":
-                exec_result = call_gemini(
+                exec_result = await call_gemini_async(
                     model="gemini-3-flash-preview",
                     contents=exec_contents,
                     response_schema=SEARCH_AND_SELECT_SCHEMA,
@@ -1237,7 +1237,7 @@ class ComputerUseAgent:
         if screenshot_b64:
             contents.append({"mime_type": "image/jpeg", "data": screenshot_b64})
 
-        result = call_gemini(
+        result = await call_gemini_async(
             model="gemini-3-flash-preview",
             contents=contents,
             response_schema=CU_PLAN_SCHEMA,

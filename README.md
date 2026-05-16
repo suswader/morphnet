@@ -150,13 +150,18 @@ morphnet/
       embeddings.json        # Capability statement embeddings for retrieval
 experiments/
   eval_140_tasks.json        # 7 sites x 20 tasks = 140 eval tasks
+  confirmtkt_20_tasks.json   # ConfirmTkt focused regression set
+  trip_planning_20_tasks.json # Multi-site reasoning tasks
   run_eval.sh                # Parallel eval runner (1 Chrome per site)
   analyze_eval.py            # Result analysis: per-site metrics, graph stats
-  real_world_tasks.json      # Original 50-task subset
-  graph_formation_test.json  # Graph builder integration tests
-  test_graph_in_browser.py   # End-to-end graph execution test
-  test_perfect_graph_direct.py  # Direct graph execution test
+  analyze_evidence_sources.py # Evidence-source field usage analysis
+tests/
+  test_two_task_e2e.py       # CU discovery -> graph -> executor pipeline
+  test_graph_in_browser.py   # End-to-end graph execution in browser
+  test_perfect_graph_direct.py # Direct curl_cffi graph replay (no LLM)
+scripts/
   plot_tool_graph.py         # Graph visualization
+  tool_graph.png             # Rendered tool graph image
 results/                     # Auto-created by runs
   {YYYY-MM-DD_HHMMSS}/      # Single run output
     result.json              # Success, answer, executor stats

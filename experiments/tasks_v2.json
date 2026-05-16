@@ -1,0 +1,12 @@
+[
+  {
+    "url": "https://example.com",
+    "task": "verify the example page loads",
+    "correct_answer": "page renders with 'Example Domain' heading"
+  },
+  {
+    "url": "https://www.swiggy.com",
+    "task": "search for La Pino'z Pizza in Kothrud, open their menu, add garlic bread to cart",
+    "correct_answer": "garlic bread item is visible in the cart with quantity 1"
+  }
+]

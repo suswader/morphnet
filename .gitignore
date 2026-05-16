@@ -56,3 +56,32 @@ uv.lock
 # Old code (fully replaced by morphnet/)
 evolving_interface/
 experiment_results/
+
+# v2 site-specific learned data (mirror of v1 entries)
+morphnet_v2/sites/*/tools.json
+morphnet_v2/sites/*/profile.json
+morphnet_v2/sites/*/credentials.json
+morphnet_v2/sites/*/captures/
+morphnet_v2/sites/*/bundle/
+morphnet_v2/sites/*/scripts/
+
+# Nested git repos (Kushan's browser-challenge + sibling harnesses) — not part of this repo
+browser-challenge/
+browser-harness/
+
+# Eval results for v2 (large, regenerable)
+results/
+experiments/results_v2/
+
+# Tool-test state file (per-session, regenerable)
+results/tool_test_state.json
+
+# Python build artefacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+
+# OS files
+.DS_Store

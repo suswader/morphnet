@@ -102,7 +102,7 @@ def _save_prompt_log(
         logger.debug("Failed to save prompt log: %s", exc)
 
 
-def call_gemini(
+async def call_gemini_async(
     *,
     model: str,
     contents: list[Any],
@@ -114,8 +114,9 @@ def call_gemini(
     """Shared Gemini inference utility. Each module provides its own model,
     schema, prompt, and config — this function just handles the call.
 
-    Returns the parsed response object (structured output if response_schema
-    is provided, raw text otherwise).
+    Async (uses client.aio) so multiple Gemini calls can be in flight at the
+    same time on one event loop. Returns parsed JSON if response_schema is
+    provided, raw text otherwise.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -125,9 +126,6 @@ def call_gemini(
         )
     client = genai.Client(api_key=api_key)
 
-    # Normalize contents: convert raw image dicts to proper Part objects.
-    # Callers pass {"mime_type": "image/jpeg", "data": "<base64>"} for convenience;
-    # the google.genai SDK requires genai_types.Part with inline_data.
     normalized: list[Any] = []
     for item in contents:
         if isinstance(item, dict) and "mime_type" in item and "data" in item:
@@ -143,8 +141,6 @@ def call_gemini(
             normalized.append(item)
 
     gc = dict(generation_config or {})
-    # Gemini 3 models default to "high" thinking which consumes output tokens.
-    # Set a thinking budget so structured output isn't truncated.
     gc.setdefault("max_output_tokens", 8192)
     gc.setdefault("thinking_config", genai_types.ThinkingConfig(thinking_budget=2048))
 
@@ -155,7 +151,6 @@ def call_gemini(
         config.response_mime_type = "application/json"
         config.response_schema = response_schema
 
-    # Save prompt to disk for debugging
     if prompt_log_dir is not None:
         global _prompt_counter
         _prompt_counter += 1
@@ -163,11 +158,11 @@ def call_gemini(
         prompt_file = prompt_log_dir / f"{_prompt_counter:03d}_{model}.txt"
         _save_prompt_log(prompt_file, model, system_instruction, contents, generation_config)
 
-    # Retry on transient network errors (server disconnect, timeout, etc.)
     last_exc: Exception | None = None
+    response = None
     for _attempt in range(3):
         try:
-            response = client.models.generate_content(
+            response = await client.aio.models.generate_content(
                 model=model,
                 contents=normalized,
                 config=config,
@@ -176,24 +171,25 @@ def call_gemini(
         except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout) as exc:
             last_exc = exc
             logger.warning("Gemini API transient error (attempt %d/3): %s", _attempt + 1, exc)
-            time.sleep(2 ** _attempt)  # 1s, 2s, 4s backoff
+            await asyncio.sleep(2 ** _attempt)
         except genai.errors.ClientError as exc:
-            # Gemini 400 "Unable to process input image" — transient, retry with same payload
             if "unable to process input image" in str(exc).lower():
                 last_exc = exc
                 logger.warning("Gemini image processing error (attempt %d/3), retrying: %s", _attempt + 1, exc)
-                time.sleep(2 ** _attempt)
+                await asyncio.sleep(2 ** _attempt)
                 continue
             raise
-    else:
-        # Image retries exhausted — strip images and retry text-only once
-        text_only = [part for part in normalized if not isinstance(part, genai_types.Part) or not getattr(part, "inline_data", None)]
+    if response is None:
+        text_only = [
+            part for part in normalized
+            if not isinstance(part, genai_types.Part) or not getattr(part, "inline_data", None)
+        ]
         if not text_only:
-            text_only = normalized  # Nothing to strip, give up
+            text_only = normalized
         if text_only != normalized:
             logger.warning("Image retries exhausted — falling back to text-only call")
             try:
-                response = client.models.generate_content(
+                response = await client.aio.models.generate_content(
                     model=model,
                     contents=text_only,
                     config=config,
@@ -203,7 +199,6 @@ def call_gemini(
         else:
             raise last_exc  # type: ignore[misc]
 
-    # Log token usage for performance analysis
     usage = getattr(response, "usage_metadata", None)
     if usage:
         prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
@@ -211,18 +206,16 @@ def call_gemini(
         thoughts_tokens = getattr(usage, "thoughts_token_count", 0) or 0
         total_tokens = getattr(usage, "total_token_count", 0) or 0
         logger.debug(
-            "Gemini %s: prompt=%d output=%d thinking=%d total=%d",
+            "Gemini async %s: prompt=%d output=%d thinking=%d total=%d",
             model, prompt_tokens, candidates_tokens, thoughts_tokens, total_tokens,
         )
 
-    # If structured output was requested, parse the JSON response
     if response_schema is not None:
         try:
             return json.loads(response.text)
         except json.JSONDecodeError:
             logger.warning("Truncated JSON from %s, retrying with larger budget. Raw: %s",
                            model, (response.text or "")[:200])
-            # Retry with more tokens and less thinking
             gc["max_output_tokens"] = 16384
             gc["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=2048)
             config2 = genai_types.GenerateContentConfig(**gc)
@@ -230,7 +223,7 @@ def call_gemini(
                 config2.system_instruction = system_instruction
             config2.response_mime_type = "application/json"
             config2.response_schema = response_schema
-            response2 = client.models.generate_content(
+            response2 = await client.aio.models.generate_content(
                 model=model, contents=normalized, config=config2,
             )
             return json.loads(response2.text)
@@ -938,13 +931,20 @@ class SessionManager:
 
     @staticmethod
     def _build_custom_stealth_script() -> str:
-        """Project-specific stealth patches on top of playwright-stealth.
+        """Project-specific patches on top of playwright-stealth.
 
-        playwright-stealth covers ~30 fingerprint vectors. This adds modern
-        detection signals from 2025-2026 that stealth doesn't cover yet.
+        Per LEARNINGS rule #3: native-overriding JS patches mostly create new
+        tells (Function.prototype.toString reveals the patched source instead
+        of `[native code]`). Only patches that *add missing surface* without
+        replacing native functions belong here. chrome.loadTimes / chrome.csi
+        / Intl / WebRTC / MediaDevices / Error overrides were removed because
+        they're either covered by playwright-stealth or net-negative on
+        Chrome 147+.
         """
         return """(() => {
-            // 1. NetworkInformation API — Cloudflare checks this
+            // 1. NetworkInformation API — adds the property only when missing.
+            //    Modern Chrome already exposes navigator.connection; this is a
+            //    no-op there and a backfill on platforms that strip it.
             if (!navigator.connection) {
                 Object.defineProperty(navigator, 'connection', {
                     get: () => ({
@@ -959,80 +959,11 @@ class SessionManager:
                 });
             }
 
-            // 2. chrome.loadTimes and chrome.csi — present in real Chrome, not Chromium
-            if (window.chrome && !window.chrome.loadTimes) {
-                window.chrome.loadTimes = function() {
-                    const now = Date.now() / 1000;
-                    return {
-                        commitLoadTime: now - 0.5, connectionInfo: 'h2',
-                        finishDocumentLoadTime: now - 0.1, finishLoadTime: now,
-                        firstPaintAfterLoadTime: 0, firstPaintTime: now - 0.2,
-                        navigationType: 'Other', npnNegotiatedProtocol: 'h2',
-                        requestTime: now - 1.0, startLoadTime: now - 1.0,
-                        wasAlternateProtocolAvailable: false,
-                        wasFetchedViaSpdy: true, wasNpnNegotiated: true,
-                    };
-                };
-            }
-            if (window.chrome && !window.chrome.csi) {
-                window.chrome.csi = function() {
-                    return {
-                        startE: Date.now(), onloadT: Date.now(),
-                        pageT: Math.random() * 1000, tran: 15,
-                    };
-                };
-            }
-
-            // 3. WebRTC local IP leak prevention
-            if (window.RTCPeerConnection) {
-                const origRTC = window.RTCPeerConnection;
-                window.RTCPeerConnection = function(...args) {
-                    const pc = new origRTC(...args);
-                    const origCreateOffer = pc.createOffer.bind(pc);
-                    pc.createOffer = function(...offerArgs) {
-                        return origCreateOffer(...offerArgs).then(offer => {
-                            if (offer.sdp) {
-                                offer.sdp = offer.sdp.replace(
-                                    /a=candidate:.*(10\\\\.|192\\\\.168\\\\.|172\\\\.(1[6-9]|2[0-9]|3[0-1])\\\\.|::1).*\\r\\n/g,
-                                    ''
-                                );
-                            }
-                            return offer;
-                        });
-                    };
-                    return pc;
-                };
-                window.RTCPeerConnection.prototype = origRTC.prototype;
-            }
-
-            // 4. Intl.DateTimeFormat — ensure calendar/numberingSystem present
-            const origResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
-            Intl.DateTimeFormat.prototype.resolvedOptions = function() {
-                const result = origResolvedOptions.call(this);
-                if (!result.calendar) result.calendar = 'gregory';
-                if (!result.numberingSystem) result.numberingSystem = 'latn';
-                return result;
-            };
-
-            // 5. MediaDevices.enumerateDevices — empty list is a bot signal
-            if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-                const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
-                navigator.mediaDevices.enumerateDevices = function() {
-                    return origEnumerate().then(devices => {
-                        if (devices.length === 0) {
-                            return [
-                                {kind: 'audioinput', deviceId: 'default', label: '', groupId: 'g1'},
-                                {kind: 'audiooutput', deviceId: 'default', label: '', groupId: 'g1'},
-                                {kind: 'videoinput', deviceId: 'cam1', label: '', groupId: 'g2'},
-                            ];
-                        }
-                        return devices;
-                    });
-                };
-            }
-
-            // 6. Capture history.pushState / replaceState for observation
-            // Use a Symbol key to avoid detection by bot-protection scanning window properties
+            // 2. SPA navigation capture for observer.py.
+            //    Symbol-keyed array hides from Object.keys(window). The
+            //    history.pushState/replaceState overrides ARE detectable via
+            //    .toString(), but observer.py:302 reads from this — removing
+            //    breaks SPA route tracking. Tradeoff acknowledged.
             const _navKey = Symbol.for('_mn_nav');
             window[_navKey] = [];
             const _origPushState = history.pushState.bind(history);
@@ -1051,23 +982,6 @@ class SessionManager:
                 });
                 return _origReplaceState(state, title, url);
             };
-
-            // 7. Clean stack traces of CDP/playwright markers
-            const origError = Error;
-            const _blockedPatterns = ['__pwInitScripts', '__playwright', 'cdc_'];
-            Error = function(...args) {
-                const err = new origError(...args);
-                if (err.stack) {
-                    for (const pat of _blockedPatterns) {
-                        err.stack = err.stack.split('\\n')
-                            .filter(line => !line.includes(pat))
-                            .join('\\n');
-                    }
-                }
-                return err;
-            };
-            Error.prototype = origError.prototype;
-            Error.captureStackTrace = origError.captureStackTrace;
         })()"""
 
     # ===================================================================
@@ -1082,7 +996,19 @@ class SessionManager:
 
         # 2. Connect to Chrome via CDP
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.connect_over_cdp(self.chrome_cdp_url)
+        # Retry once on "Browser context management is not supported" — Chrome's
+        # /json/version endpoint reports ready as soon as the DevTools server is
+        # up, but a first-run modal (e.g. the EU search-engine-choice screen)
+        # can still own the browser context for a moment after that.
+        try:
+            self._browser = await self._playwright.chromium.connect_over_cdp(self.chrome_cdp_url)
+        except Exception as exc:
+            if "Browser context management is not supported" in str(exc):
+                logger.warning("connect_over_cdp blocked by transient first-run state, retrying once")
+                await asyncio.sleep(1.5)
+                self._browser = await self._playwright.chromium.connect_over_cdp(self.chrome_cdp_url)
+            else:
+                raise
         self._context = self._browser.contexts[0]
         # Don't close stale pages — calling .close() on zombie CDP targets
         # can corrupt the Playwright session. Just create a fresh page.
@@ -1121,10 +1047,14 @@ class SessionManager:
         # (Akamai, PerimeterX) detects Debugger.enable artifacts and 403-blocks
         # all subsequent API calls.
 
-        # 4a. Apply playwright-stealth patches (~30 fingerprint vectors)
+        # 4a. Apply playwright-stealth patches (~30 fingerprint vectors).
+        # Disable navigator_webdriver: native value on raw-CDP Chrome is already
+        # `false`, and patching the property descriptor flips bot-detector
+        # verdicts from green to red (LEARNINGS section 1).
         stealth = Stealth(
             navigator_languages_override=("en-US", "en"),
             navigator_vendor_override="Google Inc.",
+            navigator_webdriver=False,
             init_scripts_only=False,
         )
         await stealth.apply_stealth_async(self._context)
@@ -1132,18 +1062,20 @@ class SessionManager:
         # 4b. Custom additions on top of stealth (modern detection in 2025-2026)
         await self.page.add_init_script(self._build_custom_stealth_script())
 
-        # 4c. Align curl_cffi TLS fingerprint with actual Chrome version
+        # 4c. Align curl_cffi TLS fingerprint with the running Chrome.
+        # LEARNINGS rule #5: bare `impersonate="chrome"` auto-tracks the
+        # latest supported Chrome major in curl_cffi — capping at a fixed
+        # version drifts away from the real browser as Chrome ships.
         ua = await self._detect_real_user_agent()
         m = re.search(r"Chrome/(\d+)", ua)
-        chrome_major = int(m.group(1)) if m else 131
-        impersonate = f"chrome{min(max(chrome_major, 110), 131)}"
-        self.http_session = cffi_requests.Session(impersonate=impersonate)
+        chrome_major = int(m.group(1)) if m else 0
+        self.http_session = cffi_requests.Session(impersonate="chrome")
         if self.proxy_server:
             self.http_session.proxies = {
                 "http": self.proxy_server,
                 "https": self.proxy_server,
             }
-        self._log("session_started", f"TLS aligned: Chrome/{chrome_major} → curl_cffi {impersonate}")
+        self._log("session_started", f"TLS aligned: Chrome/{chrome_major} → curl_cffi chrome (auto)")
 
         # 5. Traffic capture
         await self._setup_traffic_capture(self.page)
@@ -1279,13 +1211,6 @@ class SessionManager:
             pass
 
         self.page = best
-        # Re-inject anti-detection (init_script runs on next navigation)
-        try:
-            await self.page.evaluate(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => false})"
-            )
-        except Exception:
-            pass
         # Re-register traffic capture
         try:
             await self._setup_traffic_capture(self.page)
@@ -1509,16 +1434,18 @@ class SessionManager:
                 or "ERR_" in page_title
             )
             if not is_error_page:
-                # Also check page content for reload prompts
+                # Only match unambiguous Chrome net-error markers in body text.
+                # Generic copy like "Try again" / "took too long to respond"
+                # collides with bot-management challenge pages (AWS WAF,
+                # Cloudflare). Reloading a live challenge looks like bot retry
+                # and escalates a soft challenge to a hard block.
                 body_text = await self.page.evaluate(
                     "(document.body && document.body.innerText || '').slice(0, 500)"
                 )
                 is_error_page = any(
                     marker in body_text
                     for marker in ("ERR_CONNECTION", "ERR_TIMED_OUT", "ERR_NAME",
-                                   "This site can't be reached", "Press reload",
-                                   "Try again", "took too long to respond")
-                    if marker in body_text
+                                   "This site can't be reached")
                 )
             if is_error_page:
                 logger.warning("Error page detected (%s), reloading...", page_title[:40])
@@ -2668,6 +2595,7 @@ class SessionManager:
 if __name__ == "__main__":
     import argparse
     import shutil
+    import signal
     import subprocess
     import platform
 
@@ -2721,6 +2649,9 @@ if __name__ == "__main__":
         tmp_dir = project_root / ".tmp" / "chrome-profiles"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         profile_dir = tmp_dir / f"chrome-morphnet-{port}"
+        # Profiles are one-shot: bot-management cookies issued on a prior run
+        # contaminate the profile as a test subject (LEARNINGS rule #1).
+        shutil.rmtree(profile_dir, ignore_errors=True)
         cmd = [
             chrome_bin,
             f"--remote-debugging-port={port}",
@@ -2734,7 +2665,12 @@ if __name__ == "__main__":
             "--disable-sync",
             "--metrics-recording-only",
             "--disable-dev-shm-usage",
-            "--disable-features=Translate,OptimizationHints,MediaRouter",
+            # SearchEngineChoiceTrigger: EU/UK first-run search-engine-choice modal
+            # (Chrome 127+). The modal owns the browser context, which makes
+            # connect_over_cdp fail with "Browser context management is not supported"
+            # on profiles that haven't completed first-run yet. We wipe profiles every
+            # run for bot-management hygiene, so every launch is first-run.
+            "--disable-features=Translate,OptimizationHints,MediaRouter,SearchEngineChoiceTrigger",
             # Bot-detection evasion
             "--disable-blink-features=AutomationControlled",
             "--exclude-switches=enable-automation",
@@ -2754,8 +2690,40 @@ if __name__ == "__main__":
             cmd.append(f"--proxy-server={proxy_server}")
         if headless:
             cmd.append("--headless=new")
+            # --headless=new leaks "HeadlessChrome" in the legacy User-Agent.
+            # Override with the headed UA string for the same Chrome major.
+            # LEARNINGS section 5: recovers 6/7 sites that escalate headed→headless.
+            try:
+                ver = subprocess.run(
+                    [chrome_bin, "--version"], capture_output=True, text=True, timeout=5,
+                ).stdout
+                m = re.search(r"(\d+)\.\d+\.\d+\.\d+", ver)
+                major = m.group(1) if m else "147"
+            except Exception:
+                major = "147"
+            sys = platform.system()
+            if sys == "Darwin":
+                ua_platform = "Macintosh; Intel Mac OS X 10_15_7"
+            elif sys == "Windows":
+                ua_platform = "Windows NT 10.0; Win64; x64"
+            else:
+                ua_platform = "X11; Linux x86_64"
+            cmd.append(
+                f"--user-agent=Mozilla/5.0 ({ua_platform}) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
+            )
         logger.info("Launching Chrome: %s", " ".join(cmd[:3]) + " ...")
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # start_new_session=True puts Chrome and all its child processes in their
+        # own POSIX process group. Required so the cleanup path can kill the
+        # entire tree with killpg() — terminate() on the launcher PID alone
+        # leaves Chrome's actual browser process orphaned on macOS, which then
+        # causes single-instance IPC hijacking on the next task launch.
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     def _wait_for_cdp(port: int, timeout: int = 15) -> None:
         """Poll Chrome's CDP endpoint until it responds."""
@@ -3209,8 +3177,41 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error("Failed: %s", e, exc_info=True)
     finally:
-        chrome_proc.terminate()
+        # Kill the ENTIRE Chrome process tree, not just the launcher.
+        # On macOS, terminate() on the launcher alone leaves Chrome's browser
+        # process running, holding the user-data-dir lock and the CDP port —
+        # which causes the next task's Chrome launch to be hijacked via
+        # Chrome's single-instance IPC. We launched with start_new_session=True
+        # so we own the process group and can killpg the whole tree.
+        try:
+            os.killpg(os.getpgid(chrome_proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
         try:
             chrome_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            chrome_proc.kill()
+            try:
+                os.killpg(os.getpgid(chrome_proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                chrome_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Wait for Chrome to release the profile dir's SingletonLock so the
+        # NEXT task launching with the same data-dir doesn't see a corrupted
+        # profile (which triggers Chrome's "Something went wrong opening your
+        # profile" modal — the modal owns the browser context and blocks
+        # connect_over_cdp's Browser.setDownloadBehavior call).
+        profile_dir = (
+            Path(__file__).parent.parent / ".tmp" / "chrome-profiles"
+            / f"chrome-morphnet-{args.port}"
+        )
+        lock_file = profile_dir / "SingletonLock"
+        for _ in range(30):  # max 3s wait
+            if not lock_file.exists():
+                break
+            time.sleep(0.1)
+        # Best-effort full wipe so the next task starts from a known-clean state.
+        shutil.rmtree(profile_dir, ignore_errors=True)

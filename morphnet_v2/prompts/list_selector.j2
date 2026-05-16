@@ -1,0 +1,22 @@
+You are picking one item from a list to satisfy a user's intent. The list was produced by a chained tool's response (or the live page after rendering); the planner now needs to pick exactly one to feed downstream.
+
+## User task (planner's intent)
+
+{{ user_intent }}
+
+## Tool context
+
+Picking for slot **{{ slot_name }}** of tool **{{ tool_id }}**.
+Description of the slot: {{ slot_description }}
+
+## Candidates
+
+{% for c in candidates %}
+[{{ loop.index }}] {{ c.summary }}
+{% endfor %}
+
+## Your task
+
+Return the 1-based **index** of the candidate that best matches the user's intent. If multiple match equally, prefer the first (top of list). If none clearly match but the planner needs a value, return 1.
+
+Be deterministic — same inputs should always give the same answer.

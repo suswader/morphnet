@@ -1,0 +1,361 @@
+[
+  {
+    "label": "swiggy_bangalore_homepage_restaurants",
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "task": "On swiggy.com, set the delivery location to any address in Bengaluru (e.g., 'Indiranagar, Bengaluru'). Once the restaurant list loads, report the names of any 3 restaurants visible on the page.",
+    "expected_answer": "Three restaurant names from the Bengaluru listing page. Any 3 restaurants visible at the time of the run are valid; no specific restaurant is required."
+  },
+  {
+    "label": "swiggy_mumbai_pizza_search",
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "task": "On swiggy.com, set the delivery location to any address in Mumbai. Search for 'pizza'. Report the name of the first restaurant or dish in the search results.",
+    "expected_answer": "Name of the top result from a 'pizza' search in Mumbai. Any first result is valid."
+  },
+  {
+    "label": "swiggy_hyderabad_biryani_rating",
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "task": "On swiggy.com, set the delivery location to any address in Hyderabad. Search for 'biryani'. Report the name and rating of the top result.",
+    "expected_answer": "One restaurant/dish name and one numeric rating (between 3.0 and 5.0). Any top result is valid."
+  },
+  {
+    "label": "swiggy_chennai_offer_restaurant",
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "task": "On swiggy.com, set the delivery location to any address in Chennai. From the homepage restaurant list, report the name of any one restaurant that displays an offer or discount badge.",
+    "expected_answer": "One restaurant name with a visible offer (e.g., '50% off', 'Buy 1 Get 1', 'Flat ₹125 off'). Any restaurant with any offer is valid."
+  },
+  {
+    "label": "swiggy_delhi_filter_count",
+    "site": "swiggy",
+    "url": "https://www.swiggy.com",
+    "task": "On swiggy.com, set the delivery location to any address in Delhi. From the restaurant list, apply the 'Pure Veg' filter (or any single filter chip available on the page). Report whether the filter was applied and the name of one restaurant in the filtered list.",
+    "expected_answer": "Confirmation that a filter was applied and one restaurant name from the filtered results."
+  },
+
+  {
+    "label": "lego_search_bugatti",
+    "site": "lego",
+    "url": "https://www.lego.com",
+    "task": "On lego.com, use the search to look up 'Bugatti'. Report the name of the first product in the search results.",
+    "expected_answer": "One product name containing 'Bugatti' (e.g., 'Bugatti Chiron', 'Bugatti Bolide')."
+  },
+  {
+    "label": "lego_star_wars_first_product",
+    "site": "lego",
+    "url": "https://www.lego.com",
+    "task": "On lego.com, navigate to the Star Wars theme or category page (via Themes → Star Wars, or via search). Report the name of the first product shown on the listing page.",
+    "expected_answer": "One Star Wars-themed product name."
+  },
+  {
+    "label": "lego_technic_browse",
+    "site": "lego",
+    "url": "https://www.lego.com",
+    "task": "On lego.com, navigate to the Technic theme or category page. Report the name of any one Technic set visible on the listing page.",
+    "expected_answer": "One product name from the Technic listing."
+  },
+  {
+    "label": "lego_set_search_piece_count",
+    "site": "lego",
+    "url": "https://www.lego.com",
+    "task": "On lego.com, search for 'Hogwarts Castle'. Open the first product in the results. From the product page, report the piece count as displayed.",
+    "expected_answer": "One numeric piece count visible on the chosen product page."
+  },
+  {
+    "label": "lego_homepage_featured",
+    "site": "lego",
+    "url": "https://www.lego.com",
+    "task": "On the lego.com homepage, report the name of any one product or set featured in the main banner or 'New', 'Latest', or featured carousel.",
+    "expected_answer": "One product or set name visible on the homepage."
+  },
+
+  {
+    "label": "bookmyshow_bangalore_movie",
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "task": "On bookmyshow.com, set the city to Bengaluru if prompted. Report the name of any one movie listed in the Movies section.",
+    "expected_answer": "One movie name visible in the Bengaluru movies section."
+  },
+  {
+    "label": "bookmyshow_mumbai_movie_details",
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com/explore/movies-mumbai",
+    "task": "On the BookMyShow Mumbai movies page, open the page for any movie listed. Report the language(s) and runtime as shown on the movie's detail page.",
+    "expected_answer": "One movie name with its language(s) (e.g., Hindi, English, Tamil, Telugu, etc.) and a runtime in 'Xh Ym' or similar format."
+  },
+  {
+    "label": "bookmyshow_events_listing",
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "task": "On bookmyshow.com (any city), navigate to the Events section. Report the name of any one event listed.",
+    "expected_answer": "One event name from the Events listing."
+  },
+  {
+    "label": "bookmyshow_current_city",
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "task": "Open bookmyshow.com. Report the city currently selected, as shown in the page header.",
+    "expected_answer": "One city name (e.g., Mumbai, Bengaluru, Delhi-NCR, Chennai, etc.)."
+  },
+  {
+    "label": "bookmyshow_movie_cinema",
+    "site": "bookmyshow",
+    "url": "https://in.bookmyshow.com",
+    "task": "On bookmyshow.com, set the city to any major Indian city. Open the page for any one movie. Report the name of any one cinema listed as showing that movie.",
+    "expected_answer": "One movie name and one cinema/theatre name in that city."
+  },
+
+  {
+    "label": "confirmtkt_mumbai_pune_count",
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "task": "On confirmtkt.com, search trains from Mumbai (CSMT or Mumbai Central) to Pune for any date in the next 7 days. After results load, report the approximate number of trains shown in the list.",
+    "expected_answer": "One numeric count of trains in the results (or a stated approximation if exact count is not displayed)."
+  },
+  {
+    "label": "confirmtkt_delhi_howrah_train_name",
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "task": "On confirmtkt.com, search trains from New Delhi (NDLS) to Howrah (HWH) for any date 5-7 days from today. Report the name of any one train shown in the results.",
+    "expected_answer": "One train name from the results (any train listed on this route is valid)."
+  },
+  {
+    "label": "confirmtkt_pnr_feature_locate",
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "task": "On confirmtkt.com, locate the PNR Status feature (typically a tab, button, or input on the homepage). Report where it is located on the page and what input field it expects.",
+    "expected_answer": "A description of where PNR Status is located (e.g., top-nav tab, homepage card) and the input expected (typically a 10-digit PNR number)."
+  },
+  {
+    "label": "confirmtkt_blr_chennai_departure",
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "task": "On confirmtkt.com, search trains from Bangalore (SBC / KSR Bengaluru) to Chennai (MAS) for tomorrow's date. Report the departure time of any one train in the results.",
+    "expected_answer": "One time in HH:MM format from the results list."
+  },
+  {
+    "label": "confirmtkt_homepage_features",
+    "site": "confirmtkt",
+    "url": "https://www.confirmtkt.com",
+    "task": "Open confirmtkt.com. From the homepage, report the names of any 3 services or sections visible (e.g., tabs, navigation items, or feature cards).",
+    "expected_answer": "Three feature/section names visible on the homepage (e.g., Train Tickets, PNR Status, Bus, Flight, Live Train Status, etc.)."
+  },
+
+  {
+    "label": "redbus_blr_chennai_count",
+    "site": "redbus",
+    "url": "https://www.redbus.in",
+    "task": "On redbus.in, search buses from Bangalore to Chennai for tomorrow's date. Report the approximate number of buses shown in the results.",
+    "expected_answer": "One numeric count (or stated approximation) of buses in the results."
+  },
+  {
+    "label": "redbus_mumbai_pune_lowest_fare",
+    "site": "redbus",
+    "url": "https://www.redbus.in",
+    "task": "On redbus.in, search buses from Mumbai to Pune for any date in the next 7 days. Report the lowest fare visible in the results.",
+    "expected_answer": "One numeric fare in INR (typical Mumbai-Pune lowest: ₹250-₹600)."
+  },
+  {
+    "label": "redbus_delhi_manali_operator",
+    "site": "redbus",
+    "url": "https://www.redbus.in",
+    "task": "On redbus.in, search buses from Delhi to Manali for any date 5-7 days from today. Report the name of any one bus operator from the results.",
+    "expected_answer": "One operator name from the results list (e.g., HRTC, ZingBus, IntrCity SmartBus, Kallada, etc.). Any operator listed is valid."
+  },
+  {
+    "label": "redbus_hyderabad_vijayawada_departure",
+    "site": "redbus",
+    "url": "https://www.redbus.in",
+    "task": "On redbus.in, search buses from Hyderabad to Vijayawada for tomorrow's date. Report the departure time of any one bus in the results.",
+    "expected_answer": "One departure time in HH:MM format from the results."
+  },
+  {
+    "label": "redbus_homepage_popular_routes",
+    "site": "redbus",
+    "url": "https://www.redbus.in",
+    "task": "Open redbus.in. From the homepage (without performing any search), report any 3 popular routes, cities, or destinations listed or suggested on the page.",
+    "expected_answer": "Three city or route names visible on the homepage (e.g., Bangalore-Chennai, Mumbai-Pune, etc.)."
+  },
+
+  {
+    "label": "cleartrip_delhi_mumbai_airline",
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "task": "On cleartrip.com, search one-way flights from Delhi (DEL) to Mumbai (BOM) for any date 7 days from today, 1 adult, Economy. Report the name of any one airline shown in the results.",
+    "expected_answer": "One airline name from the results (e.g., IndiGo, Air India, SpiceJet, Vistara, Akasa Air). Any airline operating on this route is valid."
+  },
+  {
+    "label": "cleartrip_blr_goa_lowest_fare",
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "task": "On cleartrip.com, search one-way flights from Bangalore (BLR) to Goa (GOI or GOX, whichever the site offers) for any date in the next 14 days. Report the lowest fare visible in the results.",
+    "expected_answer": "One numeric fare in INR from the results."
+  },
+  {
+    "label": "cleartrip_hotels_goa",
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "task": "On cleartrip.com, switch to the Hotels tab. Search for hotels in Goa for any check-in date in the next 30 days. Report the name of any one hotel listed in the results.",
+    "expected_answer": "One hotel name from the Goa results."
+  },
+  {
+    "label": "cleartrip_homepage_tabs",
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "task": "Open cleartrip.com. Report all the booking tabs or categories visible at the top of the homepage (e.g., Flights, Hotels, Trains, etc.).",
+    "expected_answer": "List of tab names visible on the homepage (typically Flights, Hotels, Trains, Buses, Cabs — exact set depends on current site state)."
+  },
+  {
+    "label": "cleartrip_pune_hyderabad_airline_count",
+    "site": "cleartrip",
+    "url": "https://www.cleartrip.com",
+    "task": "On cleartrip.com, search one-way flights from Pune (PNQ) to Hyderabad (HYD) for any date 5-7 days from today, 1 adult, Economy. Report the names of all unique airlines shown in the results (deduplicated).",
+    "expected_answer": "List of unique airline names from the results (typically 2-5 airlines on this route)."
+  },
+
+  {
+    "label": "gemini_landing_state",
+    "site": "gemini",
+    "url": "https://gemini.google.com",
+    "task": "Open gemini.google.com. Report whether the page presents a chat input field (signed-in state) or a sign-in / landing page.",
+    "expected_answer": "Either 'chat input visible' (signed-in state) or 'sign-in / landing page shown'. Either is a valid finding depending on session state."
+  },
+  {
+    "label": "gemini_model_selector",
+    "site": "gemini",
+    "url": "https://gemini.google.com",
+    "task": "On gemini.google.com (signed-in chat view), locate the model selector (typically a dropdown or pill near the top of the chat). Report the name of the currently selected model. If not signed in, report that and stop.",
+    "expected_answer": "Either a model name (e.g., '2.5 Flash', '2.5 Pro', or similar) or a note that sign-in is required."
+  },
+  {
+    "label": "gemini_new_chat_action",
+    "site": "gemini",
+    "url": "https://gemini.google.com",
+    "task": "On gemini.google.com (signed-in), locate and click the 'New chat' button (typically in the left sidebar or top of the page). Report the action and what changed in the UI. If not signed in, report that and stop.",
+    "expected_answer": "Confirmation that a new chat was started and the input field is empty / chat history scrolled to the new state. Or a note that sign-in is required."
+  },
+  {
+    "label": "gemini_homepage_suggestions",
+    "site": "gemini",
+    "url": "https://gemini.google.com",
+    "task": "Open gemini.google.com. Report any prompt suggestions, example prompts, or feature highlights visible on the page (any number, including zero if none are shown).",
+    "expected_answer": "Either a list of any visible suggestions/example prompts, or 'no suggestions visible' if none are shown."
+  },
+  {
+    "label": "gemini_settings_menu",
+    "site": "gemini",
+    "url": "https://gemini.google.com",
+    "task": "On gemini.google.com (signed-in), locate the settings or menu (typically a gear icon or kebab menu near the bottom of the sidebar or top-right). Open it and report any one option or setting visible. If not signed in, report that and stop.",
+    "expected_answer": "One setting/menu option name (e.g., 'Extensions', 'Activity', 'Your data in Gemini Apps', 'Help', etc.) or a note that sign-in is required."
+  },
+
+  {
+    "label": "wikipedia_einstein_birth",
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org",
+    "task": "On Wikipedia, navigate to the article for 'Albert Einstein'. Report his date of birth as shown in the article infobox.",
+    "expected_answer": "14 March 1879 (any reasonable date format is acceptable)."
+  },
+  {
+    "label": "wikipedia_python_designer",
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org",
+    "task": "On Wikipedia, navigate to the article for 'Python (programming language)'. Report the name of the language's creator/designer as shown in the infobox.",
+    "expected_answer": "Guido van Rossum."
+  },
+  {
+    "label": "wikipedia_main_page_featured",
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org/wiki/Main_Page",
+    "task": "Open Wikipedia's Main Page. Report the title of 'Today's featured article'.",
+    "expected_answer": "One article title from the 'Today's featured article' section. Any article featured on the day of the run is valid."
+  },
+  {
+    "label": "wikipedia_apollo11_launch",
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org",
+    "task": "On Wikipedia, navigate to the article for 'Apollo 11'. Report the launch date as shown in the article infobox.",
+    "expected_answer": "July 16, 1969 (any reasonable date format is acceptable)."
+  },
+  {
+    "label": "wikipedia_everest_elevation",
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org",
+    "task": "On Wikipedia, navigate to the article for 'Mount Everest'. Report the elevation as shown in the article infobox.",
+    "expected_answer": "8,848.86 m / 29,031.7 ft (or close numeric value as shown; minor revisions to the figure are acceptable)."
+  },
+
+  {
+    "label": "github_torvalds_linux_stars",
+    "site": "github",
+    "url": "https://github.com/torvalds/linux",
+    "task": "Open the repository at github.com/torvalds/linux. Report the current star count as shown on the page.",
+    "expected_answer": "One numeric star count (typically displayed as e.g., '180k')."
+  },
+  {
+    "label": "github_cpython_latest_release",
+    "site": "github",
+    "url": "https://github.com/python/cpython",
+    "task": "Open github.com/python/cpython. Locate the 'Releases' section in the right sidebar. Report the title or version tag of the most recent release listed.",
+    "expected_answer": "One version tag (e.g., 'v3.13.x' or similar) from the Releases section."
+  },
+  {
+    "label": "github_search_top_result",
+    "site": "github",
+    "url": "https://github.com",
+    "task": "On github.com, search for 'browser-use' (use the global search). From the Repositories results, report the full name (owner/repo) of the top result.",
+    "expected_answer": "One repository name in 'owner/repo' format from the top of the Repositories results."
+  },
+  {
+    "label": "github_vscode_open_issues",
+    "site": "github",
+    "url": "https://github.com/microsoft/vscode",
+    "task": "Open github.com/microsoft/vscode. Click the 'Issues' tab. Report the count of open issues shown.",
+    "expected_answer": "One numeric count (typically displayed as e.g., '11k') for open issues."
+  },
+  {
+    "label": "github_trending_first",
+    "site": "github",
+    "url": "https://github.com/trending",
+    "task": "Open github.com/trending. Report the full name (owner/repo) of the first repository listed on the trending page.",
+    "expected_answer": "One repository name in 'owner/repo' format from the top of the trending list."
+  },
+
+  {
+    "label": "amazon_in_wireless_mouse_first",
+    "site": "amazon_in",
+    "url": "https://www.amazon.in",
+    "task": "On amazon.in, search for 'wireless mouse'. Report the brand name and price of the first organic (non-sponsored, if distinguishable) result.",
+    "expected_answer": "One brand name and one numeric price in INR. Any first result is valid."
+  },
+  {
+    "label": "amazon_in_kindle_paperwhite_price",
+    "site": "amazon_in",
+    "url": "https://www.amazon.in",
+    "task": "On amazon.in, search for 'Kindle Paperwhite'. Report the price shown for the first result.",
+    "expected_answer": "One numeric price in INR for the top Kindle Paperwhite result."
+  },
+  {
+    "label": "amazon_in_today_deals_one",
+    "site": "amazon_in",
+    "url": "https://www.amazon.in/deals",
+    "task": "On amazon.in, navigate to the 'Today's Deals' page. Report the title of any one product on deal.",
+    "expected_answer": "One product title from the Today's Deals page."
+  },
+  {
+    "label": "amazon_in_yoga_mat_search",
+    "site": "amazon_in",
+    "url": "https://www.amazon.in",
+    "task": "On amazon.in, search for 'yoga mat'. Report the name of the first result and its star rating (if visible).",
+    "expected_answer": "One product name and one star rating (if displayed; if no rating is visible, report that)."
+  },
+  {
+    "label": "amazon_in_sony_xm5",
+    "site": "amazon_in",
+    "url": "https://www.amazon.in",
+    "task": "On amazon.in, search for 'Sony WH-1000XM5'. Report the price of the first result.",
+    "expected_answer": "One numeric price in INR for the top Sony WH-1000XM5 result."
+  }
+]

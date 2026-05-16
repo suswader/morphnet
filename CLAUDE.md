@@ -57,6 +57,7 @@ The system is a pipeline: **session_manager → orchestrator → (CU | MCP) → 
 8. **Prompts live in `./morphnet/prompts/` as .txt files.** Not hardcoded in Python.
 9. **On-demand extraction.** session_manager never bundles all extractions — each consumer calls exactly what it needs.
 10. **Update README.md when making structural changes** (new modules, directories, architecture shifts).
+11. **Never truncate raw outside-world data.** HTTP request/response bodies, Set-Cookie values, init scripts, AXTrees, screenshots, CDP messages, JS source — log verbatim, byte-for-byte. If a buffer is overflowing, diagnose the root cause (paginate, stream to disk, separate hot/cold paths). Blind truncation is never the solution. Surface this rule in any prompt or representation that talks about data capture.
 
 ## Per-Site State
 

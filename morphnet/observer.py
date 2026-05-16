@@ -355,9 +355,9 @@ class Observer:
         try:
             self._cdp_session = await self._session._context.new_cdp_session(self._session.page)
 
-            # Enable domains
+            # Enable domains. Skip Runtime.enable: triggers consoleAPICalled
+            # side effects that bot detectors flag (LEARNINGS rule #3).
             await self._cdp_session.send("Network.enable")
-            await self._cdp_session.send("Runtime.enable")
             await self._cdp_session.send("Debugger.enable")
             await self._cdp_session.send("Debugger.setAsyncCallStackDepth", {"maxDepth": 32})
 

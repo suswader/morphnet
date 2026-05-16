@@ -499,7 +499,7 @@ class Executor:
             None,
         )
 
-    def _select_from_array(
+    async def _select_from_array(
         self,
         array_data: list,
         subtask_context: str,
@@ -515,7 +515,7 @@ class Executor:
         if len(array_data) == 1:
             return array_data[0]
 
-        from morphnet.session_manager import call_gemini
+        from morphnet.session_manager import call_gemini_async
 
         # Format items for the LLM — show key fields, cap at 20 items
         items_display = []
@@ -556,7 +556,7 @@ class Executor:
             system_prompt = "Select the array item that best matches the user's intent."
 
         try:
-            result = call_gemini(
+            result = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[prompt],
                 response_schema=selection_schema,
@@ -608,7 +608,7 @@ class Executor:
                             jsonpath = f"$.{jsonpath}"
                         array_data = _extract_jsonpath(source_data, jsonpath)
                         if isinstance(array_data, list) and array_data:
-                            selected_item = self._select_from_array(
+                            selected_item = await self._select_from_array(
                                 array_data,
                                 self._subtask_context,
                                 node.node_description,

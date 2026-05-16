@@ -30,6 +30,10 @@ dependencies = [
     "rebrowser-playwright>=1.52.0",
     "playwright-stealth>=2.0.3",
     "matplotlib>=3.10.8",
+    "websockets>=13.0",
+    "lorem-text>=2.1",
+    "jusText>=3.0.2",
+    "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -49,3 +53,8 @@ include = ["morphnet*"]
 
 [tool.setuptools.package-data]
 morphnet = ["sites/*/*.json"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.409",
+]

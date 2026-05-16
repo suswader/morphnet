@@ -20,7 +20,7 @@ from pathlib import Path
 
 from morphnet.session_manager import (
     SessionManager, InteractiveElement, CapturedRequest,
-    ActionResult, call_gemini,
+    ActionResult, call_gemini_async,
 )
 from morphnet.reflector import Reflector
 from morphnet.computer_use import ComputerUseAgent, SubtaskResult, ActionRecord
@@ -1171,7 +1171,7 @@ class MorphNetOrchestrator:
         )
 
         schema = _build_intent_schema(param_descriptors)
-        raw = call_gemini(
+        raw = await call_gemini_async(
             model="gemini-3-flash-preview",
             contents=[extraction_prompt],
             response_schema=schema,
@@ -1237,7 +1237,7 @@ class MorphNetOrchestrator:
             self._last_executor_response = None
 
         with self.trace.span("orchestrator", "plan_decision", f"Plan step {step}") as span:
-            plan = call_gemini(
+            plan = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[prompt],
                 response_schema=ORCHESTRATOR_SCHEMA,

@@ -206,13 +206,24 @@ Tier list from `experiments/_shared/site_list.py`:
 | **4 enterprise** | amazon.in, airbnb, nike | `clean` to `hard-block` | DataDome (airbnb), Akamai BMP (nike). Stochastic — same setup loads sometimes, hard-blocks other times |
 | **5 hostile** | lego, leboncoin, vinted | mostly `soft-flag` | CF Waiting Room + DataDome stacks; we passed through both on lego and vinted |
 
-**Key insight:** "soft-flag" doesn't mean we're being detected as a bot.
-`__cf_bm`, `cf_clearance`, `_abck`, `datadome`, `aws-waf-token` all fire on
-human browser sessions too. The relevant question is whether **OUR** flag is
-worse than a human's, and the manual-baseline diff (`SIGNALS.md`) showed:
-**every bot-management cookie that fired for our automation also fired for
-the human baseline.** We are wire-indistinguishable from a human at the
-cookie/CDN layer.
+**Key insight (revised after Phase 9):** "soft-flag" doesn't mean we're being
+detected as a bot at the wire fingerprint layer. `__cf_bm`, `cf_clearance`,
+`_abck`, `datadome`, `aws-waf-token` all fire on human browser sessions too.
+The Phase 7 `SIGNALS.md` diff confirmed every bot-management cookie *name*
+that fired for our automation also fired for the human baseline.
+
+**But cookie names ≠ cookie values.** Phase 9 re-parsed the same netlogs
+without the 16-char Set-Cookie value truncation that
+`experiments/_shared/observers.py` applied at line 189, and decoded `_abck`'s
+internal structure. Result: on 2 of 4 Akamai sites (myntra, nike) the cookie
+*value's* field 1 read `-1` (sensor data not validated as human) for our
+automation, while the human baseline reached `0` (validated). On 2 sites
+(cleartrip, makemytrip) automation also reached `0`. So we are
+**name-indistinguishable but verdict-distinguishable** at the cookie layer
+on Akamai-protected sites, and per-site outcomes vary even with identical
+launch flags.
+
+→ `experiments/phase_09_cookie_value_decode/FINDINGS.md`
 
 → `experiments/phase_07_multi_site_sweep/SWEEP_RESULTS.md` (headed verdicts)
 → `experiments/phase_07_multi_site_sweep/HEADED_VS_HEADLESS.md` (mode diff)
@@ -248,6 +259,8 @@ cookie/CDN layer.
 | 8a | manual capture of full Swiggy flow with full request/response bodies | 211 swiggy requests captured; 5 stages identified |
 | 8b | verbatim curl_cffi replay with stale captured state | 2/5 stages succeed; high-trust GETs hit WAF challenge |
 | 8c | live-Chrome state extraction + curl_cffi replay | **5/5 stages succeed in 3.7s, byte-perfect on deterministic endpoints** |
+| 9 | re-parse Phase 7 netlogs, decode `_abck` and `aws-waf-token` value structure | `_abck` field 1 = `-1` (bot) on myntra/nike auto vs `0` (human) on baseline. Cookie *names* matched but *values* didn't — overturns "wire-indistinguishable at cookie layer" |
+| 10 | bot-detector.rebrowser.net against raw-CDP no-enable / raw-CDP+`Runtime.enable` / Playwright `connect_over_cdp` eager / Playwright lazy | All 5 variants pass `runtimeEnableLeak` AND `pwInitScripts` on Chrome 148 + Playwright 1.59. The classic V8-inspector eager-format leak does not fire; Playwright 1.59 doesn't inject main-world tells via `connect_over_cdp`. Textbook is dated. |
 
 ---
 
@@ -333,6 +346,8 @@ experiments/phase_07_multi_site_sweep/SWEEP_RESULTS.md                Phase 7 he
 experiments/phase_07_multi_site_sweep/HEADED_VS_HEADLESS.md           Phase 7 mode comparison
 experiments/phase_07_multi_site_sweep/SIGNALS.md                      Phase 7 vs human baseline
 experiments/phase_08_swiggy_direct_api/8c_live_state/FINDINGS.md      Phase 8 — production architecture validated
+experiments/phase_09_cookie_value_decode/FINDINGS.md                  Phase 9 — _abck verdict flag decode
+experiments/phase_10_runtime_enable_impact/SYNTHESIS.md               Phase 10 — Runtime.enable + Playwright connectOverCDP impact
 
 memory/MEMORY.md                                                      project memory index
 memory/project_*.md                                                   per-finding rationale + how-to-apply

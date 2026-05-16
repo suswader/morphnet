@@ -20,7 +20,7 @@ from typing import Any
 
 from morphnet.session_manager import (
     SessionManager, InteractiveElement, CapturedRequest,
-    ActionResult, call_gemini,
+    ActionResult, call_gemini_async,
 )
 from morphnet.trace import TaskTrace, Evidence
 
@@ -858,7 +858,7 @@ class Reflector:
         )
 
         with self.trace.span("reflector", "llm_action_eval", f"Stage 3 LLM: {action.get('action_type')}") as span:
-            result = call_gemini(
+            result = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[prompt],
                 response_schema=ACTION_REFLECTION_SCHEMA,
@@ -1332,7 +1332,7 @@ class Reflector:
             contents.append({"mime_type": "image/jpeg", "data": screenshot_base64})
 
         with self.trace.span("reflector", "subtask_reflection", f"Subtask reflect: {subtask_description[:60]}") as span:
-            result = call_gemini(
+            result = await call_gemini_async(
                 model="gemini-3.1-pro-preview",
                 contents=contents,
                 response_schema=SUBTASK_REFLECTION_SCHEMA,

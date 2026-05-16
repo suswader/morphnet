@@ -54,7 +54,7 @@ from morphnet.manifest import (
     load_embeddings,
 )
 from google.genai import types as genai_types
-from morphnet.session_manager import call_gemini
+from morphnet.session_manager import call_gemini_async
 from morphnet.noise_filter import is_noise_url as _is_noise_url
 
 logger = logging.getLogger(__name__)
@@ -468,7 +468,7 @@ class Learner:
 
         # Step 4: Classify parameter roles via single bundled LLM call
         # Returns edges (from chained params) and updated nodes
-        edges, nodes = self._classify_parameters(nodes, chain_candidates, observation)
+        edges, nodes = await self._classify_parameters(nodes, chain_candidates, observation)
         logger.info("Step 4: Classified params — %d edges from chained params", len(edges))
 
         # pushState/replaceState are side effects of executing API nodes — the SPA's
@@ -1057,7 +1057,7 @@ class Learner:
     # Step 4: Classify parameter roles via single bundled LLM call
     # ------------------------------------------------------------------
 
-    def _classify_parameters(
+    async def _classify_parameters(
         self,
         nodes: list[GraphNode],
         chain_candidates: dict[tuple[str, str], list[dict]],
@@ -1164,7 +1164,7 @@ class Learner:
         schema = _build_classify_schema(params_to_classify)
 
         try:
-            result = call_gemini(
+            result = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[user_prompt],
                 response_schema=schema,
@@ -2167,7 +2167,7 @@ class Learner:
         intent_system = intent_prompt_path.read_text(encoding="utf-8") if intent_prompt_path.exists() else ""
 
         try:
-            raw_intent = call_gemini(
+            raw_intent = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[extraction_prompt],
                 response_schema={"type": "object", "properties": properties, "required": list(properties.keys())},
@@ -2565,7 +2565,7 @@ Produce JSON with keys:
 Be specific about the user's visible outcome. Avoid jargon about HTTP or APIs."""
 
         try:
-            result = call_gemini(
+            result = await call_gemini_async(
                 model="gemini-3-flash-preview",
                 contents=[user_prompt],
                 response_schema=_NAMING_SCHEMA,

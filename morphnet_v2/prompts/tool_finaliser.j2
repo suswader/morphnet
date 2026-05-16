@@ -1,0 +1,59 @@
+You are finalising a candidate web-tool synthesised from observed HTTP traffic captured while a browser agent (CU) was performing a task. Your job: decide whether this is a useful tool worth replaying, and if so, author its name + capability statement + per-slot descriptions.
+
+## Endpoint
+
+{{ method }} {{ host }}{{ path }}
+Dispatch kind: {{ dispatch_kind }}
+Captured {{ call_count }} time(s) in this discovery task.
+
+## Slots (varying parameters detected)
+
+{% for name, slot in slots.items() %}
+- **{{ name }}**: kind={{ slot.kind }}
+{%- if slot.kind == "chained" %}
+  - chain_source: {{ slot.chain_source }}
+  - via: {{ slot.html_attribute or slot.response_jmespath or "?" }}
+  {%- if slot.container_signature %}
+  - container_signature: {{ slot.container_signature }}
+  {%- endif %}
+  {%- if slot.list_selector_needed %}
+  - source is a list → list-selector LLM picks one at execution time
+  {%- endif %}
+{%- elif slot.kind == "user_intent_text" %}
+  - observed typed examples: {{ slot.captured_examples | tojson }}
+{%- endif %}
+{%- if slot.observed_values %}
+  - observed values (use these to describe the EXACT format the server expects): {{ slot.observed_values | tojson }}
+{%- endif %}
+{%- if slot.kind == "captured" %}
+  - required: {{ slot.required }}
+{%- endif %}
+{% endfor %}
+
+## Constants (baked into the request template)
+
+{% for name, val in constants.items() %}
+- {{ name }} = {{ val | tojson }}
+{% endfor %}
+
+## Sample response (first 800 chars)
+
+{{ sample_response_preview }}
+
+## Preceding CU actions (most recent first, last 5)
+
+{% for a in preceding_actions %}
+- {{ a }}
+{% endfor %}
+
+## Causal initiator scriptId
+
+{{ causal_initiator }}
+
+## Your task
+
+Decide:
+1. **Verdict**: `keep` if this is a meaningful user-facing capability the planner can compose into tasks (e.g. station autocomplete, train search, product details). `discard` if it looks like analytics, telemetry, ad pixel, or a generic page-load housekeeping call with no user-actionable purpose.
+2. If **keep**: produce a `snake_case` `tool_id` prefixed with the site root (e.g. `confirmtkt_search_station`, `amazon_open_product`), a one-sentence `capability_statement` describing what this tool does for the user, and one short description per slot explaining what the planner should supply.
+
+Be terse. Slot descriptions should be a single sentence. Capability statement should be one sentence.
