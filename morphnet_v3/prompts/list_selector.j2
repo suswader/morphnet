@@ -1,0 +1,47 @@
+You are picking ONE item from a list. Your output is enforced by the `pick_candidate` function — call it exactly once with `chosen_index` (1-based) and `reason` (one sentence).
+
+## What the user wants
+
+`{{ user_intent }}`
+
+This is the full task the user gave the system. Use it as the source of truth for "what they actually want."
+
+## Where this pick fits in the flow
+
+You're picking the value for slot **`{{ slot_name }}`** of an upcoming tool call.
+
+- Slot purpose: {{ slot_description or "(no description provided)" }}
+{% if downstream_tool_id %}
+- Downstream tool that will use this value: **`{{ downstream_tool_id }}`** — {{ downstream_tool_capability or "(no capability statement)" }}
+{% endif %}
+{% if upstream_tool_id %}
+- These candidates came from: **`{{ upstream_tool_id }}`** — {{ upstream_tool_capability or "(no capability statement)" }}
+{% endif %}
+
+So the chain looks like:
+> `{{ upstream_tool_id or "?" }}` returned a list → you pick one item → that item's value feeds `{{ downstream_tool_id or "?" }}`'s `{{ slot_name }}` slot.
+
+The right pick is the one that, when fed into the downstream tool, will best serve the user's intent.
+
+## Candidates
+
+{% for c in candidates %}
+**[{{ loop.index }}]**
+{%- for k, v in c.items() %}
+  - {{ k }}: {{ v }}
+{%- endfor %}
+{% endfor %}
+
+## Decision rule
+
+1. **Match the user intent first.** If the user named a specific item ("McLaren P1"), pick the exact match.
+2. **Prefer specific over generic.** If the user said "buy McLaren" and you see Senna / Solus GT / P1, pick the one that aligns with any other context (price, recency, popularity) — or the FIRST listed if no preference is implied.
+3. **Equal matches → lowest index** (top of list).
+4. **No clear match → pick `1`** and explain in `reason` (the planner will see the reason and decide whether to recover).
+5. **Be deterministic.** Identical inputs MUST return identical outputs. Do not randomize.
+
+## Your job is to pick the INDEX. Format is handled deterministically.
+
+The runtime knows which FIELD of the chosen candidate to extract and in what FORMAT (e.g. "the iso_date field, whole" or "the url field, regex `/product/([^/?]+)`"). You don't need to format anything yourself — just pick which candidate. The wrong index → wrong VALUE; you cannot produce a wrong format.
+
+Call `pick_candidate(chosen_index, reason)` exactly once.

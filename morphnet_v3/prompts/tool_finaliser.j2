@@ -1,0 +1,136 @@
+You are naming and describing a tool that has already been built and verified. Output ONLY one JSON object matching `## Output`. No prose. No extra fields.
+
+Your job is **author + verifier**, NOT classifier. Every source bucket below is a FACT determined by the deterministic tracer. Do not re-classify them. Your three tasks:
+
+1. Write a short, planner-readable `tool_id` (verb_noun, snake_case)
+2. Write a `capability_statement` that says (a) what the tool does for the user AND (b) what shape the response takes
+3. Write a one-sentence `description` per slot — what value the planner should supply, in user-facing terms
+
+## Task being performed during discovery
+
+`{{ original_task }}`
+
+This is what the user-emulator was trying to accomplish. The HTTP call below fired during that task; use the task as context for what this tool likely DOES.
+
+## Endpoint
+
+`{{ method }} {{ host }}{{ path }}`
+- payload_type: `{{ payload_type }}`
+- observed status: `{{ status }}`
+
+## CU actions that led to this call
+
+The browser actions taken in the same step window, BEFORE this HTTP fired. They contextualize what the user was doing right when this endpoint was hit.
+
+{% if scoped_cu_actions %}
+{% for a in scoped_cu_actions %}
+- `{{ a.kind }}`: {{ a.summary }}
+{%- endfor %}
+{% else %}
+(none captured in the same step — this call fired automatically on page-load / hydration)
+{% endif %}
+
+## Originating script(s)
+
+The app-code script that emitted this request. The script URL often hints what the tool is for (e.g. a script under `/cart/...` is cart-related).
+
+{% for s in script_summary %}
+- {{ s }}
+{%- endfor %}
+
+## Slots (parameters this tool accepts at replay)
+
+Each slot is annotated with its **source bucket** — the FACT of where its value comes from at replay (set by the deterministic tracer; do NOT revise):
+
+- `chained_resp` — flows from an upstream tool's response
+- `user_intent:typed` — planner generates this from the user task (analogous to user-typed text)
+- `user_intent:click` — derived from a click target the user touched
+- `cookie:<name>` — read from the live cookie jar
+- `session_state:<key>` — read from live localStorage / sessionStorage
+- `bundle:<kind>` — a stable literal from the JS bundle (replayed verbatim)
+- `generated:<kind>` — re-generated per call (traceparent / timestamp / user_agent)
+
+When writing slot descriptions: describe the VALUE from the planner's perspective (what to supply, what it represents). Do NOT describe the source bucket — that's mechanical.
+
+**Format is critical.** For any slot whose value has a SPECIFIC FORMAT the server expects, you MUST state the format explicitly in the description. The planner will use this to generate values for `user_intent:typed` slots; getting the format wrong → API rejects the request.
+
+Format hints to include when applicable:
+- Dates: state the format using the captured example as ground truth. `"ISO 8601 date like 2026-05-19"` or `"epoch milliseconds (13 digits)"` or `"DD-MM-YYYY"`.
+- Currencies / numbers: `"integer rupees, no decimals"` or `"price in cents as a string"`.
+- Codes / slugs: `"kebab-case slug like mclaren-p1-42172"` or `"3-letter uppercase station code"`.
+- Booleans: `"the string 'true' or 'false', not Python boolean"`.
+- Enums: `"one of FEATURED|PIECE_COUNT|PRICE_LOW_TO_HIGH"`.
+- Free text: `"natural-language search query (no special encoding required)"`.
+
+When in doubt, COPY the captured example's format and describe it verbatim. The captured example is the ground truth.
+
+{% for name, slot in slots.items() %}
+- **`{{ name }}`** in `{{ slot.location }}`  →  source: `{{ slot.source.bucket }}{% if slot.source.sub_type %}:{{ slot.source.sub_type }}{% endif %}`
+{%- if slot.examples %}
+  - example: `{{ slot.examples[0][:120] }}`
+{%- endif %}
+{%- if slot.chain_edge %}
+  - chain: `{{ slot.chain_edge.kind }}` from `{{ slot.chain_edge.source_tool_id }}`
+  {%- if slot.chain_edge.list_jsonpath %}, list `{{ slot.chain_edge.list_jsonpath }}`, candidate_fields={{ slot.chain_edge.selector_recipe.get("candidate_fields", []) | tojson }}{% endif %}
+{%- endif %}
+{%- if slot.intent_binding %}
+  - intent: `{{ slot.intent_binding.kind }}`
+{%- endif %}
+{% endfor %}
+
+## Sample response excerpt (first 800 chars — for shape inference)
+
+```
+{{ sample_response_preview }}
+```
+
+## Naming convention
+
+Format: `<verb>_<noun>` — lowercase snake_case. NO site prefix (the planner only ever sees same-site tools).
+
+Verbs (pick the one matching the user-facing action):
+- `search` — keyword/text search returning a list
+- `list` — browse / paginate a catalog or category
+- `open` — fetch one specific item's detail view
+- `get` — read a piece of state (cart, profile, session)
+- `add` — mutate to add (add-to-cart)
+- `update` / `set` / `select` — mutate existing state, pick a value
+- `remove` — delete / cancel
+- `submit` — finalize a multi-step flow (place order, checkout)
+- `verify` — validate input (PNR check, captcha)
+
+Nouns: singular, the thing the action operates on. `product`, `cart`, `train`, `restaurant`, `theme`, `address`, `seat`, `payment`, `session`.
+
+Examples:
+- `open_product`, `search_themes`, `list_category`, `add_to_cart`, `submit_order`, `verify_pnr`
+
+## Capability statement format
+
+ONE sentence with TWO parts joined by " — Returns: ":
+1. **What the tool does**, in user terms (not mechanics)
+2. **The response shape**, as a compact key list `{key1, key2, nested: {...}}`
+
+The shape helps the planner reason about WHICH tool to compose next without having to read the full response.
+
+Examples:
+- `open_product — Fetch a LEGO product's detail page by slug. Returns: {product: {id, name, price, images[], inventory_status, description}}`
+- `search_themes — Search LEGO themes by keyword and return matching themes. Returns: {themes: [{name, slug, count, image_url}, ...]}`
+- `add_to_cart — Add a product to the shopping cart by SKU. Returns: {cart_item_id, cart_total, cart_count}`
+
+## Analytics / housekeeping flag
+
+If the endpoint looks like analytics / telemetry / session housekeeping / experiment assignment / consent management / A-B variant probing, **mention this explicitly in the capability_statement** — start the sentence with `[ANALYTICS-LIKE]` or `[HOUSEKEEPING]`. The graph-isolation gate already dropped obvious ones; you're catching the leakers. The planner will avoid these in production but they remain in the DAG for debug.
+
+Examples (when leaked through isolation):
+- `[ANALYTICS-LIKE] Session-event collector for marketing attribution. Returns: {ok: true}`
+- `[HOUSEKEEPING] Consent-state mutation for cookie banner. Returns: {success}`
+
+## Output
+
+Your response is constrained to the `ToolFinaliserResponse` schema via Gemini structured output. The runtime parses it directly — do not wrap in markdown, do not add prose, do not add extra fields.
+
+The three fields you fill:
+
+- `tool_id` — lowercase snake_case `<verb>_<noun>` (no site prefix, no hyphens)
+- `capability_statement` — ONE sentence: `<what the tool does> — Returns: {<key>, <key>, <nested: {...}>, ...}`. If the endpoint looks like analytics / housekeeping / experiment / consent, PREFIX with `[ANALYTICS-LIKE]` or `[HOUSEKEEPING]` (graph isolation already dropped obvious ones; you're catching the leakers).
+- `slot_descriptions` — a LIST of `{slot_name, description}` entries, ONE per slot in `## Slots` above. Never invent slots, never drop them. Each `description`: ONE sentence describing the VALUE in user terms (not the source bucket — that's mechanical), and including a FORMAT hint when the value is date/code/enum/etc.
